@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "circuitppl"
+version = "0.1.0"
+description = "A Python DSL for hardware description with LLM-powered compilation"
+requires-python = ">=3.10"
+dependencies = [
+    "applang",
+]
+
+[tool.setuptools.packages.find]
+include = ["cppl*"]
