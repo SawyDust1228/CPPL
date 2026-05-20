@@ -142,6 +142,22 @@ Notes:
 - `LLM_MODEL` is required for DSL compilation because there is no `appl.yaml` fallback.
 - Optional generation overrides are available via `LLM_TEMPERATURE`, `LLM_TOP_P`, and `LLM_REASONING_EFFORT`. By default CircuitPPL does not force `temperature`, which avoids compatibility issues with models such as `gpt-5`.
 
+## Citation
+
+If you use CPPL in your research, please cite:
+
+```bibtex
+@misc{yin2026cpplcircuitpromptprogramming,
+      title={CPPL: A Circuit Prompt Programming Language}, 
+      author={Shuo Yin and Yihe Wang and Lancheng Zou and Xufeng Yao and Tinghuan Chen and Chen Bai and Zhengrong Wang and Tsung-Yi Ho and Bei Yu},
+      year={2026},
+      eprint={2605.17892},
+      archivePrefix={arXiv},
+      primaryClass={cs.AR},
+      url={https://arxiv.org/abs/2605.17892}, 
+}
+```
+
 ## Project Structure
 
 ```
