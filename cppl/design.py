@@ -10,7 +10,7 @@ from .ir.validator import validate_design
 from .ir.infer import infer_widths
 from .codegen.circt import generate_mlir, generate_verilog
 
-from .frontend.compiler import CompilationError, compile_module
+from .frontend.compiler import CompilationError, compile_modules
 from .frontend.module import ModuleDef
 
 
@@ -21,14 +21,17 @@ class Design:
         self._modules: List[ModuleDef] = []
         self._compiled: Optional[List[dict]] = None
 
-    def add(self, mod: ModuleDef) -> "Design":
-        """Append a module and its transitive sub-modules.
+    def add(self, *mods: ModuleDef) -> "Design":
+        """Append modules in dependency-first instance-tree order.
 
         Recursively discovers all modules referenced via instance calls
-        and adds them in dependency-first order.  Returns *self* for chaining.
+        and adds them before the module that instantiates them.  Calling
+        ``add(top)`` therefore compiles leaves first and the top module last.
+        Multiple roots are accepted and are processed left to right.
         """
         seen = {m.name for m in self._modules}
-        self._add_recursive(mod, seen)
+        for mod in mods:
+            self._add_recursive(mod, seen)
         self._compiled = None
         return self
 
@@ -47,9 +50,13 @@ class Design:
         if self._compiled is not None:
             return self._compiled
 
+        compiled = compile_modules(self._modules, max_retries=max_retries)
+        if len(compiled) != len(self._modules):
+            error = compiled[0].error if compiled else "unknown compilation error"
+            raise CompilationError(error)
+
         results: List[dict] = []
-        for mod in self._modules:
-            result = compile_module(mod, max_retries=max_retries)
+        for mod, result in zip(self._modules, compiled):
             if not result.success:
                 raise CompilationError(
                     f"Compilation of module '{mod.name}' failed: {result.error}"

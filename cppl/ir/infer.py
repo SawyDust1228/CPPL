@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Dict, List
 
@@ -30,6 +31,7 @@ from .models import (
 class ValueInfo:
     width: int
     source: str  # human-readable origin description
+    type: str = "bits"
 
 
 def infer_widths(modules: List[Module]) -> Dict[str, Dict[str, ValueInfo]]:
@@ -54,7 +56,11 @@ def _infer_module(
     # Seed with input ports
     for pname, pdef in mod.ports.items():
         if pdef.dir == PortDir.INPUT:
-            env[pname] = ValueInfo(width=pdef.width, source=f"input port '{pname}'")
+            env[pname] = ValueInfo(
+                width=pdef.width,
+                source=f"input port '{pname}'",
+                type=pdef.type,
+            )
 
     # Pre-register RegOps that have an explicit width annotation.
     # This breaks inference cycles (e.g. pc_reg -> npc -> pc_reg).
@@ -141,7 +147,9 @@ def _can_infer(op: Operation, env: Dict[str, ValueInfo]) -> bool:
             return False
         return True
     elif isinstance(op, MemOp):
-        if op.clock not in env or op.reset not in env:
+        if op.clock not in env:
+            return False
+        if op.reset and op.reset not in env:
             return False
         for addr, enable in op.reads:
             if addr not in env or enable not in env:
@@ -263,18 +271,32 @@ def _infer_op(
             raise WidthError(
                 f"{loc}: mem clock '{op.clock}' must be 1-bit, got {clk_w}"
             )
-        rst_w = _width_of(op.reset, env, loc)
-        if rst_w != 1:
-            raise WidthError(
-                f"{loc}: mem reset '{op.reset}' must be 1-bit, got {rst_w}"
-            )
+        addr_width = max(1, math.ceil(math.log2(op.depth)))
+        if op.reset:
+            rst_w = _width_of(op.reset, env, loc)
+            if rst_w != 1:
+                raise WidthError(
+                    f"{loc}: mem reset '{op.reset}' must be 1-bit, got {rst_w}"
+                )
         for i, (addr, enable) in enumerate(op.reads):
+            addr_w = _width_of(addr, env, loc)
+            if addr_w != addr_width:
+                raise WidthError(
+                    f"{loc}: mem reads[{i}].addr '{addr}' must be {addr_width}-bit "
+                    f"for depth {op.depth}, got {addr_w}"
+                )
             en_w = _width_of(enable, env, loc)
             if en_w != 1:
                 raise WidthError(
                     f"{loc}: mem reads[{i}].enable '{enable}' must be 1-bit, got {en_w}"
                 )
         for i, (addr, data, enable) in enumerate(op.writes):
+            addr_w = _width_of(addr, env, loc)
+            if addr_w != addr_width:
+                raise WidthError(
+                    f"{loc}: mem writes[{i}].addr '{addr}' must be {addr_width}-bit "
+                    f"for depth {op.depth}, got {addr_w}"
+                )
             en_w = _width_of(enable, env, loc)
             if en_w != 1:
                 raise WidthError(
@@ -307,6 +329,12 @@ def _infer_op(
                 raise WidthError(
                     f"{loc}: instance input '{port_name}' has width {ref_w} "
                     f"but module '{op.module}' expects {target_port.width}"
+                )
+            ref_type = env[ref].type
+            if ref_type != target_port.type:
+                raise WidthError(
+                    f"{loc}: instance input '{port_name}' has type {ref_type} "
+                    f"but module '{op.module}' expects {target_port.type}"
                 )
 
         # Register output widths

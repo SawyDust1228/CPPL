@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import threading
+import ast
+import inspect
+import textwrap
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 from .types import _PortType
 
@@ -15,11 +18,13 @@ class PortInfo:
     name: str
     width: int
     direction: str  # "input" | "output"
+    kind: str = "bits"
 
 
 @dataclass
 class InstanceCall:
     """Records one module-instantiation captured during @module body tracing."""
+    name: Optional[str]
     target_name: str
     target_ports: List[PortInfo]
     input_map: Dict[str, str]   # child_input_port → parent_value_id
@@ -161,6 +166,7 @@ class ModuleDef:
             output_ids.append(f"{module_lower}_{p.name}{suffix}")
 
         inst = InstanceCall(
+            name=None,
             target_name=self.name,
             target_ports=list(self.ports),
             input_map=input_map,
@@ -178,13 +184,70 @@ class ModuleDef:
             return _MultiInstanceOutputProxy(outputs_dict)
 
 
+def _instance_assignment_names(func: Callable) -> List[Optional[str]]:
+    """Return assignment targets for ModuleDef calls in source order."""
+    try:
+        source = inspect.getsource(func)
+    except OSError:
+        return []
+
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except SyntaxError:
+        return []
+
+    module_names = {
+        name
+        for name, value in func.__globals__.items()
+        if isinstance(value, ModuleDef)
+    }
+
+    names: List[Optional[str]] = []
+
+    def _call_target(node: ast.AST) -> Optional[str]:
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in module_names:
+                return node.func.id
+        return None
+
+    class Visitor(ast.NodeVisitor):
+        def visit_Assign(self, node: ast.Assign) -> None:
+            if _call_target(node.value):
+                target = node.targets[0] if node.targets else None
+                if isinstance(target, ast.Name):
+                    names.append(target.id)
+                else:
+                    names.append(None)
+                return
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            if _call_target(node.value):
+                if isinstance(node.target, ast.Name):
+                    names.append(node.target.id)
+                else:
+                    names.append(None)
+                return
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if _call_target(node):
+                names.append(None)
+                return
+            self.generic_visit(node)
+
+    Visitor().visit(tree)
+    return names
+
+
 def module(func: Callable) -> ModuleDef:
     """Decorator that converts a typed Python function into a :class:`ModuleDef`.
 
-    Input ports come from function parameters annotated with ``In[N]``.
+    Input ports come from function parameters annotated with ``In[N]`` or ``Clock``.
     Output ports come from the return annotation:
       - ``-> Out[N]``       : single output named ``"out"``
       - ``-> {"x": Out[N], ...}`` : named outputs
+      - ``-> {}``                 : no output ports
 
     If the function body calls other ModuleDef objects (module instantiation),
     the calls are captured and the function may return an f-string description
@@ -206,7 +269,19 @@ def module(func: Callable) -> ModuleDef:
                 f"Parameter '{param_name}' of module '{func.__name__}' "
                 f"must be an input port (In[N]), got {ann!r}"
             )
-        ports.append(PortInfo(name=param_name, width=ann.width, direction="input"))
+        if ann.kind == "clock" and ann.width != 1:
+            raise TypeError(
+                f"Clock parameter '{param_name}' of module '{func.__name__}' "
+                "must be 1 bit wide."
+            )
+        ports.append(
+            PortInfo(
+                name=param_name,
+                width=ann.width,
+                direction="input",
+                kind=ann.kind,
+            )
+        )
 
     ret = annotations.get("return")
     if ret is None:
@@ -221,7 +296,19 @@ def module(func: Callable) -> ModuleDef:
                 f"Return annotation of module '{func.__name__}' "
                 f"must be an output port (Out[N]), got {ret!r}"
             )
-        ports.append(PortInfo(name="out", width=ret.width, direction="output"))
+        if ret.kind == "clock":
+            raise TypeError(
+                f"Return annotation of module '{func.__name__}' "
+                "cannot be Clock; Clock is input-only."
+            )
+        ports.append(
+            PortInfo(
+                name="out",
+                width=ret.width,
+                direction="output",
+                kind=ret.kind,
+            )
+        )
     elif isinstance(ret, dict):
         for port_name, ann in ret.items():
             if not isinstance(ann, _PortType):
@@ -234,7 +321,19 @@ def module(func: Callable) -> ModuleDef:
                     f"Output '{port_name}' of module '{func.__name__}' "
                     f"must be an output port (Out[N]), got {ann!r}"
                 )
-            ports.append(PortInfo(name=port_name, width=ann.width, direction="output"))
+            if ann.kind == "clock":
+                raise TypeError(
+                    f"Output '{port_name}' of module '{func.__name__}' "
+                    "cannot be Clock; Clock is input-only."
+                )
+            ports.append(
+                PortInfo(
+                    name=port_name,
+                    width=ann.width,
+                    direction="output",
+                    kind=ann.kind,
+                )
+            )
     else:
         raise TypeError(
             f"Return annotation of module '{func.__name__}' must be Out[N] or "
@@ -252,6 +351,9 @@ def module(func: Callable) -> ModuleDef:
         instances = list(_capture_ctx.calls)
     finally:
         _capture_ctx.calls = None
+
+    for inst, name in zip(instances, _instance_assignment_names(func)):
+        inst.name = name
 
     if isinstance(result, str) and result.strip():
         docstring = result.strip()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Set
 
 from .errors import CycleError, SSAError, ValidationError
@@ -56,6 +57,19 @@ def _check_ports(mod: Module) -> None:
             raise ValidationError(
                 f"Module '{mod.name}': port '{pname}' width must be positive"
             )
+        if pdef.type not in ("bits", "clock"):
+            raise ValidationError(
+                f"Module '{mod.name}': port '{pname}' has invalid type '{pdef.type}'"
+            )
+        if pdef.type == "clock":
+            if pdef.dir != PortDir.INPUT:
+                raise ValidationError(
+                    f"Module '{mod.name}': clock port '{pname}' must be an input"
+                )
+            if pdef.width != 1:
+                raise ValidationError(
+                    f"Module '{mod.name}': clock port '{pname}' width must be 1"
+                )
 
 
 def _check_ssa_and_terminator(mod: Module) -> None:
@@ -123,7 +137,7 @@ def _check_args_defined(op: Operation, defined: Set[str], loc: str) -> None:
     elif isinstance(op, MemOp):
         if op.clock not in defined:
             raise SSAError(f"{loc}: clock references undefined value '{op.clock}'")
-        if op.reset not in defined:
+        if op.reset and op.reset not in defined:
             raise SSAError(f"{loc}: reset references undefined value '{op.reset}'")
         for i, (addr, enable) in enumerate(op.reads):
             if addr not in defined:
@@ -186,10 +200,18 @@ def _check_output_coverage(mod: Module) -> None:
 def _check_instances(mod: Module, module_map: Dict[str, Module]) -> None:
     """Validate InstanceOp references: module exists, ports match."""
     ctx = f"Module '{mod.name}'"
+    instance_names: Set[str] = set()
     for i, op in enumerate(mod.body):
         if not isinstance(op, InstanceOp):
             continue
         loc = f"{ctx} body[{i}]"
+        if op.name:
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_$]*$", op.name):
+                raise ValidationError(f"{loc}: invalid instance name '{op.name}'")
+            if op.name in instance_names:
+                raise ValidationError(f"{loc}: duplicate instance name '{op.name}'")
+            instance_names.add(op.name)
+
         target = module_map.get(op.module)
         if target is None:
             raise ValidationError(

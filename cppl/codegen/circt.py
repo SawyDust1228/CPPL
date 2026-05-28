@@ -8,11 +8,13 @@ Optionally exports Verilog via circt.export_verilog().
 from __future__ import annotations
 
 import io
+import re
 from typing import Dict, List, Optional
 
 import pycde.circt as circt
 from pycde.circt.ir import (
     ArrayAttr,
+    Attribute,
     Context,
     FlatSymbolRefAttr,
     InsertionPoint,
@@ -80,8 +82,15 @@ class _ModuleEmitter:
             raise CodegenError(f"No MLIR value for '{id_}'")
         return v
 
+    def _clock_val(self, id_: str) -> Value:
+        value = self._val(id_)
+        port = self.mod.ports.get(id_)
+        if port is not None and port.type == "clock":
+            return value
+        return seq.to_clock(value)
+
     def _fresh_instance_name(self, module_name: str) -> str:
-        name = f"{module_name}_{self._instance_counter}"
+        name = f"{module_name.lower()}_{self._instance_counter}"
         self._instance_counter += 1
         return name
 
@@ -104,7 +113,9 @@ class _ModuleEmitter:
                 return False
             return True
         elif isinstance(op, MemOp):
-            if op.clock not in self._env or op.reset not in self._env:
+            if op.clock not in self._env:
+                return False
+            if op.reset and op.reset not in self._env:
                 return False
             for addr, enable in op.reads:
                 if addr not in self._env or enable not in self._env:
@@ -120,7 +131,10 @@ class _ModuleEmitter:
     def emit(self) -> None:
         """Create the hw.module op at the current insertion point."""
         in_ports = [
-            (name, _iN(pdef.width))
+            (
+                name,
+                seq.ClockType.get() if pdef.type == "clock" else _iN(pdef.width),
+            )
             for name, pdef in self.mod.ports.items()
             if pdef.dir == PortDir.INPUT
         ]
@@ -350,7 +364,7 @@ class _ModuleEmitter:
 
     def _emit_reg(self, op: RegOp) -> None:
         data = self._val(op.args[0])
-        clk = seq.to_clock(self._val(op.clock))
+        clk = self._clock_val(op.clock)
         data_w = self._width(op.args[0])
 
         kwargs: dict = {"name": op.id}
@@ -376,11 +390,13 @@ class _ModuleEmitter:
         element_type = _iN(op.width)
         hlmem_type = Type.parse(f"!seq.hlmem<{op.depth}x{element_type}>")
 
-        clk = seq.to_clock(self._val(op.clock))
-        rst = self._val(op.reset)
+        clk = self._clock_val(op.clock)
+        if op.reset:
+            rst = self._val(op.reset)
+        else:
+            rst = hw.ConstantOp(IntegerAttr.get(_iN(1), 0)).result
 
-        # Use the first output id as a reasonable name for the memory
-        mem_name = op.id[0] if op.id else "mem"
+        mem_name = op.name or (op.id[0] if op.id else "mem")
         mem = seq.HLMemOp(
             handle=hlmem_type, clk=clk, rst=rst, name=mem_name,
         ).result
@@ -405,8 +421,53 @@ class _ModuleEmitter:
                 inData=data, wrEn=enable, latency=1,
             )
 
+    def _emit_firmem(self, op: MemOp) -> None:
+        mem_name = op.name or (op.id[0] if op.id else "mem")
+        mem_type = Type.parse(f"!seq.firmem<{op.depth} x {op.width}>")
+        clk = self._clock_val(op.clock)
+
+        try:
+            collision_attr = IntegerAttr.get(IntegerType.get_signless(32), 0)
+            escaped_file = op.initFile.replace("\\", "\\\\").replace('"', '\\"')
+            init_attr = Attribute.parse(
+                f'#seq.firmem.init<"{escaped_file}", false, '
+                f'{"true" if op.initFormat == "bin" else "false"}>'
+            )
+            mem = seq.FirMemOp(
+                mem_type,
+                0,
+                1,
+                collision_attr,
+                collision_attr,
+                name=mem_name,
+                init=init_attr,
+            ).result
+        except Exception as exc:
+            raise CodegenError(
+                "Failed to construct seq.firmem for initialized memory."
+            ) from exc
+
+        for i, (addr_ref, enable_ref) in enumerate(op.reads):
+            rdata = seq.FirMemReadOp(
+                mem,
+                self._val(addr_ref),
+                clk,
+                enable=self._val(enable_ref),
+                results=[_iN(op.width)],
+            ).result
+            self._env[op.id[i]] = rdata
+
+        for addr_ref, data_ref, enable_ref in op.writes:
+            seq.FirMemWriteOp(
+                mem,
+                self._val(addr_ref),
+                clk,
+                self._val(data_ref),
+                enable=self._val(enable_ref),
+            )
+
     def _emit_instance(self, op: InstanceOp) -> None:
-        inst_name = self._fresh_instance_name(op.module)
+        inst_name = op.name or self._fresh_instance_name(op.module)
 
         # Collect input values in the order they appear in op.args
         input_values = [self._val(ref) for ref in op.args.values()]
@@ -440,7 +501,6 @@ class _ModuleEmitter:
         # Map each output id to its corresponding result
         for i, id_ in enumerate(op.id):
             self._env[id_] = inst.results[i]
-
 
 def _resolve_top_modules(
     modules: List[Module],
@@ -488,6 +548,62 @@ def _build_mlir_module(
     return mlir_module
 
 
+def _collect_mem_initializers(
+    modules: List[Module],
+) -> Dict[str, List[tuple[str, str, str]]]:
+    """Return initialized memories as {module_name: [(name, file, task)]}."""
+    result: Dict[str, List[tuple[str, str, str]]] = {}
+    for mod in modules:
+        for op in mod.body:
+            if not isinstance(op, MemOp) or not op.initFile:
+                continue
+            mem_name = op.name or (op.id[0] if op.id else "mem")
+            task = "$readmemb" if op.initFormat == "bin" else "$readmemh"
+            result.setdefault(mod.name, []).append((mem_name, op.initFile, task))
+    return result
+
+
+def _inject_mem_initializers(
+    verilog: str,
+    initializers: Dict[str, List[tuple[str, str, str]]],
+) -> str:
+    """Insert readmem initial blocks for lowered HLMem arrays."""
+    if not initializers:
+        return verilog
+
+    module_re = re.compile(r"(?ms)^module\s+([A-Za-z_][A-Za-z0-9_$]*)\b.*?^endmodule")
+
+    def repl(match: re.Match[str]) -> str:
+        module_name = match.group(1)
+        block = match.group(0)
+        for mem_name, init_file, task in initializers.get(module_name, []):
+            escaped_file = init_file.replace("\\", "\\\\").replace('"', '\\"')
+            decl_re = re.compile(
+                rf"(?m)^(?P<indent>\s*)reg\b(?P<body>[^\n;]*\b"
+                rf"{re.escape(mem_name)}\s*\[[^\n;]+\];)"
+            )
+
+            def insert_after_decl(decl_match: re.Match[str]) -> str:
+                indent = decl_match.group("indent")
+                initializer = (
+                    f'\n{indent}initial begin\n'
+                    f'{indent}  {task}("{escaped_file}", {mem_name});\n'
+                    f'{indent}end'
+                )
+                return decl_match.group(0) + initializer
+
+            block = decl_re.sub(insert_after_decl, block, count=1)
+        return block
+
+    verilog = module_re.sub(repl, verilog)
+    return re.sub(
+        r'(initial begin)\n\s*\n(\s*\$readmem[hb]\("[^"]+",\s*'
+        r'[A-Za-z_][A-Za-z0-9_$]*\);\n)\s*\n(\s*end)',
+        r'\1\n\2\3',
+        verilog,
+    )
+
+
 def generate_mlir(
     modules: List[Module],
     all_widths: Dict[str, Dict[str, ValueInfo]],
@@ -533,12 +649,17 @@ def generate_verilog(
 
     if top is not None:
         modules = _resolve_top_modules(modules, top)
+    mem_initializers = _collect_mem_initializers(modules)
 
     with Context() as ctx, Location.unknown():
         circt.register_dialects(ctx)
         mlir_module = _build_mlir_module(modules, all_widths, ctx)
 
-        pipeline = ["hw.module(lower-seq-hlmem)", "lower-seq-to-sv"]
+        pipeline = [
+            "hw.module(lower-seq-hlmem)",
+            "lower-seq-firmem",
+            "lower-seq-to-sv",
+        ]
         if optimize:
             pipeline.extend([
                 "canonicalize",
@@ -557,4 +678,4 @@ def generate_verilog(
 
         buf = io.StringIO()
         circt.export_verilog(mlir_module, buf)
-        return buf.getvalue()
+        return _inject_mem_initializers(buf.getvalue(), mem_initializers)

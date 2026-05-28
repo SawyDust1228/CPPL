@@ -10,13 +10,19 @@ SYSTEM_PROMPT = r"""You are a hardware compiler that translates natural-language
 
 The IR is a list of modules. Each module has:
 - **name** (string)
-- **ports** (object mapping port names to `{"dir": "input"|"output", "width": N}`)
+- **ports** (object mapping port names to `{"dir": "input"|"output", "width": N}`, optionally with `"type": "clock"` for clock inputs)
 - **body** (ordered array of operations)
 
 You will be given the module name, its ports, and a natural-language description of the logic. You must produce **only** the `"body"` array.
+Do not explain your reasoning. Do not include analysis text. The first character
+of your response must be `[` and the last character must be `]`.
 
 ## SSA Rules
 - Input port names are automatically available as value IDs.
+- Use untyped decimal JSON numbers for simple constants in operand positions,
+  for example `0`, `1`, `2`, or `3`. Do not use bit-width syntax such as
+  `1'b1`, `32'h0`, or `32'd4`. The compiler will infer widths and lower
+  decimal numbers into constant ops.
 - Every operation that produces a value has a unique `"id"` (string).
 - Forward references are forbidden: an op can only reference IDs defined by previous ops or input ports.
 - No ID shadowing: each ID must be unique within the module.
@@ -26,9 +32,11 @@ You will be given the module name, its ports, and a natural-language description
 
 ### constant
 ```json
-{"id": "<name>", "op": "constant", "value": <int_or_hex_string>, "width": <N>}
+{"id": "<name>", "op": "constant", "value": <int>, "width": <N>}
 ```
 Creates a constant value of the given bit width.
+Prefer decimal JSON numbers directly in operand positions for simple constants;
+use explicit constant ops only when a named constant value is clearer.
 
 ### Unary ops: not, neg, reverse
 ```json
@@ -112,27 +120,38 @@ Register captures data on the rising edge of clock, subject to enable and reset.
 ### mem (memory / register array)
 ```json
 {"id": ["<read_data_id>", ...], "op": "mem", "width": <N>, "depth": <D>,
- "clock": "<clk_id>", "reset": "<rst_id>",
+ "clock": "<clk_id>", "reset": "<rst_id>", "name": "<rtl_array_name>",
+ "initFile": "<optional_readmem_file>", "initFormat": "hex",
  "reads": [{"addr": "<addr_id>", "enable": "<ren_id>"}],
  "writes": [{"addr": "<addr_id>", "data": "<wdata_id>", "enable": "<wen_id>"}]}
 ```
 - Creates a register-array memory with D entries of N bits each
 - `id` has one entry per read port (each output is N bits wide)
 - `reads`: combinational read ports; `writes`: synchronous write ports
-- `clock`: 1-bit clock, `reset`: 1-bit synchronous reset
+- `clock`: 1-bit clock, `reset`: optional 1-bit synchronous reset
+- `name`: optional stable RTL memory array name
+- `initFile`: optional file path used to initialize the memory
+- `initFormat`: optional, `hex` or `bin`; defaults to `hex`
+- Define all read enable, write enable, write data, and address values before
+  the mem operation. Do not put the mem operation before its operands.
+- The mem operation must use `"id": ["read0", "read1", ...]`, always an array
+  with one ID per read port. Never use a string ID for mem.
+- Memory addresses must be word indices with width `ceil(log2(depth))`. For a
+  4096-entry memory, use 12-bit addresses such as bits `[13:2]` of a byte
+  address, not the original 32-bit byte address.
 - Read/write enables must be 1-bit; write data must be N bits wide
 
 ### instance (module instantiation)
 ```json
-{"id": ["<out1_id>", ...], "op": "instance", "module": "<ModuleName>", "args": {"<child_input>": "<value_id>", ...}}
+{"id": ["<out1_id>", ...], "op": "instance", "module": "<ModuleName>", "name": "<instance_name>", "args": {"<child_input>": "<value_id>", ...}}
 ```
-Instantiates another module. `id` is an array with one entry per output port of the child module (in declaration order). `args` maps child input port names to value IDs.
+Instantiates another module. `id` is an array with one entry per output port of the child module (in declaration order). `name` is optional but must be preserved exactly when provided. `args` maps child input port names to value IDs.
 
 ### output (terminator — always last)
 ```json
 {"op": "output", "args": {"<output_port>": "<value_id>", ...}}
 ```
-Maps module output port names to value IDs. Must cover every output port exactly once.
+Maps module output port names to value IDs. Must cover every output port exactly once. Use `{}` for modules with no output ports.
 
 ## Examples
 
@@ -203,6 +222,8 @@ Body:
 - Return ONLY a valid JSON array (the "body").
 - Do NOT wrap the output in markdown code fences.
 - Do NOT include any explanation or commentary — just the JSON array.
+- Do NOT include chain-of-thought, analysis, or planning text.
+- Keep the JSON compact and complete; never stop in the middle of an operation.
 - Make sure every output port is driven in the final "output" operation.
 - Use descriptive but concise SSA IDs (e.g. "sum", "diff", "mux_result").
 """
@@ -211,8 +232,11 @@ Body:
 def _append_instance_details(lines: list[str], instances: list[InstanceCall]) -> None:
     for inst in instances:
         arg_str = ", ".join(f"{k}={v}" for k, v in inst.input_map.items())
-        lines.append(f"  Instance of '{inst.target_name}': "
+        name = f" named '{inst.name}'" if inst.name else ""
+        lines.append(f"  Instance{name} of '{inst.target_name}': "
                      f"{inst.target_name}({arg_str})")
+        if inst.name:
+            lines.append(f"    - instance op must include \"name\": \"{inst.name}\"")
 
         output_ports = [
             p for p in inst.target_ports if p.direction == "output"
@@ -239,7 +263,8 @@ def build_user_prompt(
     lines.append("")
     lines.append("Ports:")
     for p in mod.ports:
-        lines.append(f"  - {p.name}: {p.direction}, width {p.width}")
+        kind = f", type {p.kind}" if p.kind != "bits" else ""
+        lines.append(f"  - {p.name}: {p.direction}, width {p.width}{kind}")
     lines.append("")
     lines.append(f"Logic description:\n{mod.docstring}")
 

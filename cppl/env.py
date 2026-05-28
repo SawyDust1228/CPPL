@@ -160,6 +160,14 @@ def resolve_llm_generation_kwargs() -> dict[str, Any]:
     if reasoning_effort is not None:
         kwargs["reasoning_effort"] = reasoning_effort
 
+    timeout = resolve_env_value("LLM_TIMEOUT")
+    if timeout is not None:
+        kwargs["timeout"] = float(timeout)
+
+    max_tokens = resolve_env_value("LLM_MAX_TOKENS")
+    if max_tokens is not None:
+        kwargs["max_tokens"] = int(max_tokens)
+
     return kwargs
 
 

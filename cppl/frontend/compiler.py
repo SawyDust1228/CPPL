@@ -7,9 +7,6 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-import appl
-from appl import gen, ppl, SystemMessage, UserMessage
-
 from ..env import (
     apply_server_override,
     resolve_llm_generation_kwargs,
@@ -22,6 +19,7 @@ from ..ir.infer import infer_widths
 
 from .module import InstanceCall, ModuleDef
 from .prompt import SYSTEM_PROMPT, build_user_prompt
+from .const_analysis import normalize_constants
 
 
 _APPL_SERVER_CONFIGURED = False
@@ -29,6 +27,8 @@ _APPL_SERVER_CONFIGURED = False
 
 def _configure_appl_server() -> None:
     """Apply .env-provided server overrides to APPL after import-time init."""
+    import appl
+
     global _APPL_SERVER_CONFIGURED
     if _APPL_SERVER_CONFIGURED:
         return
@@ -55,12 +55,35 @@ class CompileResult:
     attempts: int = 0
 
 
+class CompilerSession:
+    """Stateful LLM compiler session for one design compilation."""
+
+    def __init__(self) -> None:
+        from appl import SystemMessage
+
+        _configure_appl_server()
+        self.messages = [SystemMessage(SYSTEM_PROMPT)]
+
+    def compile(self, mod: ModuleDef, max_retries: int = 3) -> dict:
+        return _compile_one_in_context(
+            mod,
+            max_retries=max_retries,
+            messages=self.messages,
+        )
+
+
 def _extract_json_array(text: str) -> list:
     """Extract a JSON array from an LLM response, stripping markdown fences."""
     text = text.strip()
     m = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
     if m:
         text = m.group(1).strip()
+    elif text.startswith("```"):
+        raise json.JSONDecodeError(
+            "markdown JSON fence is incomplete; response was likely truncated",
+            text,
+            0,
+        )
     return json.loads(text)
 
 
@@ -68,7 +91,10 @@ def _ports_dict(mod: ModuleDef) -> dict:
     """Convert ModuleDef ports to the JSON-IR ports object."""
     d: dict = {}
     for p in mod.ports:
-        d[p.name] = {"dir": p.direction, "width": p.width}
+        entry = {"dir": p.direction, "width": p.width}
+        if p.kind != "bits":
+            entry["type"] = p.kind
+        d[p.name] = entry
     return d
 
 
@@ -76,12 +102,15 @@ def _instance_ops(instances: List[InstanceCall]) -> list:
     """Generate JSON-IR instance operations from captured InstanceCalls."""
     ops = []
     for inst in instances:
-        ops.append({
+        op = {
             "id": inst.output_ids,
             "op": "instance",
             "module": inst.target_name,
             "args": inst.input_map,
-        })
+        }
+        if inst.name:
+            op["name"] = inst.name
+        ops.append(op)
     return ops
 
 
@@ -112,6 +141,8 @@ def _has_instance_op(body: list, inst: InstanceCall) -> bool:
             continue
         if op.get("args") != inst.input_map:
             continue
+        if inst.name and op.get("name") != inst.name:
+            continue
         return True
     return False
 
@@ -131,7 +162,10 @@ def _make_stub_dicts(instances: List[InstanceCall]) -> List[dict]:
         body: list = []
 
         for p in inst.target_ports:
-            ports[p.name] = {"dir": p.direction, "width": p.width}
+            entry = {"dir": p.direction, "width": p.width}
+            if p.kind != "bits":
+                entry["type"] = p.kind
+            ports[p.name] = entry
 
         output_args: dict = {}
         output_ports = [
@@ -158,43 +192,54 @@ def _make_stub_dicts(instances: List[InstanceCall]) -> List[dict]:
     return list(seen.values())
 
 
-@ppl(ctx="new")
-def _compile_one(mod: ModuleDef, max_retries: int = 3) -> dict:
+def _compile_one_in_context(
+    mod: ModuleDef,
+    max_retries: int = 3,
+    *,
+    messages: list,
+) -> dict:
     """Compile a single ModuleDef to a validated JSON-IR module dict.
 
     Uses the appl LLM framework with a feedback loop: if the generated body
     fails validation, the error is fed back and the LLM retries.
     """
-    _configure_appl_server()
-    SystemMessage(SYSTEM_PROMPT)
-
     ports = _ports_dict(mod)
     last_error: Optional[str] = None
 
     preplaced_instances, deferred_instances = _split_instances(mod)
-    UserMessage(build_user_prompt(
+    from appl import AIMessage, UserMessage, gen
+
+    messages.append(UserMessage(build_user_prompt(
         mod,
         preplaced_instances=preplaced_instances,
         deferred_instances=deferred_instances,
-    ))
+    )))
 
     inst_ops = _instance_ops(preplaced_instances)
     stub_dicts = _make_stub_dicts(mod.instances) if mod.instances else []
-    gen_kwargs = {"max_tokens": 4096, **resolve_llm_generation_kwargs()}
+    gen_kwargs = {
+        "max_tokens": 12000,
+        "timeout": 90,
+        **resolve_llm_generation_kwargs(),
+    }
 
     for _ in range(max_retries):
-        response = gen(**gen_kwargs)
+        response = gen(messages=messages, **gen_kwargs)
         response_text = str(response)
+        messages.append(AIMessage(response_text))
 
         try:
             llm_body = _extract_json_array(response_text)
         except (json.JSONDecodeError, ValueError) as exc:
             last_error = f"JSON parse error: {exc}\nRaw response:\n{response_text}"
-            UserMessage(
-                f"Your response was not valid JSON.\n"
+            messages.append(UserMessage(
+                f"Your response was not valid JSON. It may have included "
+                f"reasoning text or been truncated.\n"
                 f"Error: {exc}\n"
-                f"Please output ONLY a JSON array for the body, with no extra text."
-            )
+                f"Please output ONLY one compact JSON array for the body. "
+                f"The first character must be '[' and the last character must be ']'. "
+                f"Do not use markdown fences, comments, or explanatory text."
+            ))
             continue
 
         missing_instances = [
@@ -204,14 +249,18 @@ def _compile_one(mod: ModuleDef, max_retries: int = 3) -> dict:
         if missing_instances:
             missing = ", ".join(inst.target_name for inst in missing_instances)
             last_error = f"Missing required instance operation(s): {missing}"
-            UserMessage(
+            messages.append(UserMessage(
                 f"{last_error}.\n"
                 f"Include each required instance op exactly as listed, after "
                 f"its input value IDs are defined."
-            )
+            ))
             continue
 
-        full_body = inst_ops + llm_body
+        full_body = normalize_constants(
+            inst_ops + llm_body,
+            ports,
+            mod.instances,
+        )
         module_dict = {"name": mod.name, "ports": ports, "body": full_body}
 
         try:
@@ -222,10 +271,10 @@ def _compile_one(mod: ModuleDef, max_retries: int = 3) -> dict:
             return module_dict
         except CircuitPPLError as exc:
             last_error = str(exc)
-            UserMessage(
+            messages.append(UserMessage(
                 f"The generated JSON-IR body failed validation:\n{exc}\n"
                 f"Please fix the body and regenerate. Output ONLY the corrected JSON array."
-            )
+            ))
             continue
 
     raise CompilationError(
@@ -241,7 +290,7 @@ class CompilationError(CircuitPPLError):
 def compile_module(mod: ModuleDef, max_retries: int = 3) -> CompileResult:
     """Compile a single :class:`ModuleDef` and return a :class:`CompileResult`."""
     try:
-        module_dict = _compile_one(mod, max_retries=max_retries)
+        module_dict = CompilerSession().compile(mod, max_retries=max_retries)
         return CompileResult(
             module_dict=module_dict,
             success=True,
@@ -253,3 +302,33 @@ def compile_module(mod: ModuleDef, max_retries: int = 3) -> CompileResult:
             error=str(exc),
             attempts=max_retries,
         )
+
+
+def compile_modules(
+    mods: List[ModuleDef],
+    max_retries: int = 3,
+) -> List[CompileResult]:
+    """Compile several modules in one LLM session.
+
+    The system prompt is sent once for the whole batch. Each module still gets
+    its own user prompt and retry feedback.
+    """
+    try:
+        session = CompilerSession()
+        module_dicts = [
+            session.compile(mod, max_retries=max_retries)
+            for mod in mods
+        ]
+    except (CompilationError, CircuitPPLError) as exc:
+        return [
+            CompileResult(success=False, error=str(exc), attempts=max_retries)
+        ]
+
+    return [
+        CompileResult(
+            module_dict=module_dict,
+            success=True,
+            attempts=max_retries,
+        )
+        for module_dict in module_dicts
+    ]

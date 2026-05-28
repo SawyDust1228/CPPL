@@ -16,6 +16,7 @@ class PortDir(Enum):
 class PortDef:
     dir: PortDir
     width: int
+    type: str = "bits"
 
 
 @dataclass(frozen=True)
@@ -90,9 +91,12 @@ class MemOp:
     width: int              # element bit width
     depth: int              # number of entries
     clock: str              # clock signal ref
-    reset: str              # reset signal ref
+    reset: str              # optional reset signal ref
     reads: tuple            # ((addr_ref, enable_ref), ...)
     writes: tuple           # ((addr_ref, data_ref, enable_ref), ...)
+    name: str = ""
+    initFile: str = ""
+    initFormat: str = "hex"
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,7 @@ class InstanceOp:
     op: str  # "instance"
     module: str
     args: Dict[str, str]  # child_input_port -> value_id
+    name: str = ""
 
 
 @dataclass(frozen=True)

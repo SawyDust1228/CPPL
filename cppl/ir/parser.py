@@ -80,7 +80,15 @@ def _parse_module(raw: Dict[str, Any], index: int) -> Module:
         w = pdef.get("width")
         if not isinstance(w, int) or w <= 0:
             raise ParseError(f"{ctx}: port '{pname}' width must be a positive integer")
-        ports[pname] = PortDef(dir=PortDir(d), width=w)
+        port_type = pdef.get("type", "bits")
+        if port_type not in ("bits", "clock"):
+            raise ParseError(f"{ctx}: port '{pname}' type must be 'bits' or 'clock'")
+        if port_type == "clock":
+            if d != "input":
+                raise ParseError(f"{ctx}: clock port '{pname}' must be an input")
+            if w != 1:
+                raise ParseError(f"{ctx}: clock port '{pname}' width must be 1")
+        ports[pname] = PortDef(dir=PortDir(d), width=w, type=port_type)
 
     body_raw = raw.get("body")
     if not isinstance(body_raw, list):
@@ -275,9 +283,9 @@ def _parse_mem(raw: Dict[str, Any], loc: str) -> MemOp:
     if not isinstance(clock, str) or not clock:
         raise ParseError(f"{loc}: 'clock' must be a non-empty string")
 
-    reset = raw.get("reset")
-    if not isinstance(reset, str) or not reset:
-        raise ParseError(f"{loc}: 'reset' must be a non-empty string")
+    reset = raw.get("reset", "")
+    if not isinstance(reset, str):
+        raise ParseError(f"{loc}: 'reset' must be a string")
 
     reads_raw = raw.get("reads")
     if not isinstance(reads_raw, list):
@@ -318,10 +326,23 @@ def _parse_mem(raw: Dict[str, Any], loc: str) -> MemOp:
             "must have one output id per read port"
         )
 
+    name = raw.get("name", "")
+    if not isinstance(name, str):
+        raise ParseError(f"{loc}: 'name' must be a string")
+
+    init_file = raw.get("initFile", "")
+    if not isinstance(init_file, str):
+        raise ParseError(f"{loc}: 'initFile' must be a string")
+
+    init_format = raw.get("initFormat", "hex")
+    if init_format not in ("hex", "bin"):
+        raise ParseError(f"{loc}: 'initFormat' must be 'hex' or 'bin'")
+
     return MemOp(
         id=id_, op="mem", width=width, depth=depth,
         clock=clock, reset=reset,
         reads=tuple(reads), writes=tuple(writes),
+        name=name, initFile=init_file, initFormat=init_format,
     )
 
 
@@ -336,7 +357,10 @@ def _parse_instance(raw: Dict[str, Any], loc: str) -> InstanceOp:
     if not isinstance(module, str) or not module:
         raise ParseError(f"{loc}: 'module' must be a non-empty string")
     args = _require_str_dict(raw, "args", loc)
-    return InstanceOp(id=id_, op="instance", module=module, args=args)
+    name = raw.get("name", "")
+    if not isinstance(name, str):
+        raise ParseError(f"{loc}: 'name' must be a string")
+    return InstanceOp(id=id_, op="instance", module=module, args=args, name=name)
 
 
 def _parse_output(raw: Dict[str, Any], loc: str) -> OutputOp:
