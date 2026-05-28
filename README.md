@@ -18,7 +18,7 @@ Python DSL (@module)  →  LLM Compilation  →  JSON-IR  →  MLIR / Verilog
 ### Define Modules
 
 ```python
-from cppl import module, In, Out, Design
+from cppl import module, In, Out, Clock, Design
 
 @module
 def Adder8(a: In[8], b: In[8]) -> Out[8]:
@@ -44,6 +44,7 @@ print(design.to_verilog())
 
 Key points:
 - `In[N]` / `Out[N]` specify N-bit input/output ports
+- `Clock` specifies a dedicated clock input port, for example `clk: Clock`
 - Single output uses `-> Out[N]` (named `"out"`), multiple outputs use `-> {"name": Out[N], ...}`
 - Docstrings describe the logic in natural language for the LLM
 - Modules can instantiate other modules by calling them; use f-string returns to reference instance outputs
