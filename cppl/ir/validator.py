@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 from .errors import CycleError, SSAError, ValidationError
 from .models import (
@@ -36,8 +36,9 @@ def validate_design(modules: List[Module], *, strict: bool = True) -> None:
         _check_instances(mod, module_map)
     # Static analysis checks (strict mode)
     if strict:
+        dependency_cache: Dict[str, Dict[str, Set[str]]] = {}
         for mod in modules:
-            _check_combinational_cycles(mod)
+            _check_combinational_cycles(mod, module_map, dependency_cache)
 
 
 def _check_module_names(modules: List[Module]) -> Dict[str, Module]:
@@ -246,7 +247,90 @@ def _check_instances(mod: Module, module_map: Dict[str, Module]) -> None:
             )
 
 
-def _build_comb_graph(mod: Module) -> Dict[str, List[str]]:
+def _module_output_input_deps(
+    mod: Module,
+    module_map: Dict[str, Module],
+    cache: Dict[str, Dict[str, Set[str]]],
+    active: Optional[Set[str]] = None,
+) -> Dict[str, Set[str]]:
+    """Return output-port dependencies on this module's input ports."""
+    if mod.name in cache:
+        return cache[mod.name]
+    if active is None:
+        active = set()
+    if mod.name in active:
+        return {}
+
+    active.add(mod.name)
+    deps: Dict[str, Set[str]] = {}
+    input_ports = {
+        name for name, pdef in mod.ports.items() if pdef.dir == PortDir.INPUT
+    }
+    for name in input_ports:
+        deps[name] = {name}
+
+    for op in mod.body:
+        if isinstance(op, OutputOp):
+            continue
+
+        if isinstance(op, ConstantOp):
+            deps[op.id] = set()
+
+        elif isinstance(op, RegOp):
+            # Sequential boundary: register output has no same-cycle deps.
+            deps[op.id] = set()
+
+        elif isinstance(op, MemOp):
+            for idx, (addr, enable) in enumerate(op.reads):
+                out_id = op.id[idx]
+                deps[out_id] = set(deps.get(addr, set())) | set(
+                    deps.get(enable, set())
+                )
+            # Write ports are sequential and do not affect read outputs here.
+
+        elif isinstance(op, InstanceOp):
+            target = module_map.get(op.module)
+            child_deps = (
+                _module_output_input_deps(target, module_map, cache, active)
+                if target is not None else {}
+            )
+            target_outputs = []
+            if target is not None:
+                target_outputs = [
+                    name for name, pdef in target.ports.items()
+                    if pdef.dir == PortDir.OUTPUT
+                ]
+            for out_id, child_out in zip(op.id, target_outputs):
+                out_deps: Set[str] = set()
+                for child_input in child_deps.get(child_out, set()):
+                    parent_ref = op.args.get(child_input)
+                    if parent_ref is not None:
+                        out_deps.update(deps.get(parent_ref, set()))
+                deps[out_id] = out_deps
+
+        else:
+            out_id = op.id
+            out_deps: Set[str] = set()
+            for arg in op.args:
+                out_deps.update(deps.get(arg, set()))
+            deps[out_id] = out_deps
+
+    last = mod.body[-1]
+    assert isinstance(last, OutputOp)
+    result = {
+        port: set(deps.get(ref, set()))
+        for port, ref in last.args.items()
+    }
+    active.remove(mod.name)
+    cache[mod.name] = result
+    return result
+
+
+def _build_comb_graph(
+    mod: Module,
+    module_map: Dict[str, Module],
+    dependency_cache: Dict[str, Dict[str, Set[str]]],
+) -> Dict[str, List[str]]:
     """Build a combinational dependency graph (adjacency list: dep -> [dependents]).
 
     Edges represent combinational (same-cycle) dataflow: an edge from A to B
@@ -283,12 +367,25 @@ def _build_comb_graph(mod: Module) -> Dict[str, List[str]]:
             # Write ports are sequential — no edges
 
         elif isinstance(op, InstanceOp):
-            # Conservative: every input feeds every output
+            target = module_map.get(op.module)
+            child_deps = (
+                _module_output_input_deps(target, module_map, dependency_cache)
+                if target is not None else {}
+            )
+            target_outputs = []
+            if target is not None:
+                target_outputs = [
+                    name for name, pdef in target.ports.items()
+                    if pdef.dir == PortDir.OUTPUT
+                ]
             for out_id in op.id:
                 graph.setdefault(out_id, [])
-            for arg_ref in op.args.values():
-                graph.setdefault(arg_ref, [])
-                for out_id in op.id:
+            for out_id, child_out in zip(op.id, target_outputs):
+                for child_input in child_deps.get(child_out, set()):
+                    arg_ref = op.args.get(child_input)
+                    if arg_ref is None:
+                        continue
+                    graph.setdefault(arg_ref, [])
                     graph[arg_ref].append(out_id)
 
         else:
@@ -306,9 +403,13 @@ def _build_comb_graph(mod: Module) -> Dict[str, List[str]]:
 _WHITE, _GRAY, _BLACK = 0, 1, 2
 
 
-def _check_combinational_cycles(mod: Module) -> None:
+def _check_combinational_cycles(
+    mod: Module,
+    module_map: Dict[str, Module],
+    dependency_cache: Dict[str, Dict[str, Set[str]]],
+) -> None:
     """Detect combinational cycles using DFS with 3-color marking."""
-    graph = _build_comb_graph(mod)
+    graph = _build_comb_graph(mod, module_map, dependency_cache)
 
     color: Dict[str, int] = {node: _WHITE for node in graph}
     parent: Dict[str, str] = {}
