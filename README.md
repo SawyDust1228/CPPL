@@ -50,6 +50,37 @@ Key points:
 - Modules can instantiate other modules by calling them; use f-string returns to reference instance outputs
 - `Design.add()` recursively discovers and adds all sub-modules — only the top-level module needs to be added
 
+### Agent Runtime
+
+CPPL compiles each module in an isolated Agent context. Independent modules are
+compiled concurrently in dependency waves; validation failures are repaired in
+a fresh context containing only the latest candidate and compact diagnostics.
+Validated results are cached by content under `.cppl/cache`, so compiling an
+unchanged design again requires no LLM calls.
+
+Existing code continues to work. Optional runtime controls and reports are
+available through `AgentConfig`:
+
+```python
+from cppl import AgentConfig, Design
+
+design = Design(agent_config=AgentConfig(
+    max_parallelism=4,
+    context_window_tokens=32768,
+    cache_enabled=True,
+))
+design.add(ALU)
+
+report = design.compile_with_report(max_retries=3)
+print(report.llm_calls, report.cache_hits)
+for name, module_report in report.module_reports.items():
+    print(name, module_report.status, module_report.attempts)
+```
+
+Python configuration overrides `CPPL_AGENT_*` environment variables. Reports
+contain timing, token estimates, cache and diagnostic metadata, but never store
+API keys or complete prompts/responses.
+
 ### Run the Demo
 
 **Install (editable / development mode):**

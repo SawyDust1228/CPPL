@@ -66,6 +66,13 @@ def normalize_constants(
         }
         for inst in instances
     }
+    instance_outputs = {
+        inst.target_name: [
+            p.width for p in inst.target_ports
+            if p.direction == "output"
+        ]
+        for inst in instances
+    }
     const_ids: dict[tuple[int, int], str] = {}
 
     def fresh_const(value: int, width: int) -> str:
@@ -111,6 +118,11 @@ def normalize_constants(
                 for name in id_:
                     if isinstance(name, str):
                         value_widths[name] = int(op.get("width", 1))
+            elif opname == "instance" and isinstance(id_, list):
+                output_widths = instance_outputs.get(op.get("module"), [])
+                for name, width in zip(id_, output_widths):
+                    if isinstance(name, str):
+                        value_widths[name] = width
             return
 
         if opname == "constant":

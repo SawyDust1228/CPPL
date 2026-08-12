@@ -150,6 +150,7 @@ activemq-data/
 # Environments
 .env
 .envrc
+.cppl/
 .venv
 env/
 venv/

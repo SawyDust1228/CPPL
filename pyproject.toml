@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "A Python DSL for hardware description with LLM-powered compilation"
 requires-python = ">=3.10"
 dependencies = [
-    "applang",
+    "applang==0.2.2",
+    "pycde==0.9.1.dev146",
+    "termcolor<3",
 ]
 
 [tool.setuptools.packages.find]

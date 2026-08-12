@@ -78,7 +78,7 @@ def _parse_module(raw: Dict[str, Any], index: int) -> Module:
         if d not in ("input", "output"):
             raise ParseError(f"{ctx}: port '{pname}' dir must be 'input' or 'output'")
         w = pdef.get("width")
-        if not isinstance(w, int) or w <= 0:
+        if isinstance(w, bool) or not isinstance(w, int) or w <= 0:
             raise ParseError(f"{ctx}: port '{pname}' width must be a positive integer")
         port_type = pdef.get("type", "bits")
         if port_type not in ("bits", "clock"):
@@ -168,13 +168,25 @@ def _require_str_dict(raw: Dict[str, Any], key: str, loc: str) -> Dict[str, str]
     return val
 
 
+def _require_integer_literal(value: Any, field: str, loc: str) -> None:
+    """Ensure a value can be lowered by codegen as an integer literal."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ParseError(f"{loc}: '{field}' must be an integer or integer string")
+    if isinstance(value, str):
+        try:
+            int(value, 0)
+        except ValueError as exc:
+            raise ParseError(
+                f"{loc}: '{field}' must be a valid integer string, got {value!r}"
+            ) from exc
+
+
 def _parse_constant(raw: Dict[str, Any], loc: str) -> ConstantOp:
     id_ = _require_id(raw, loc)
     value = raw.get("value")
-    if not isinstance(value, (int, str)):
-        raise ParseError(f"{loc}: 'value' must be an integer or string")
+    _require_integer_literal(value, "value", loc)
     width = raw.get("width")
-    if not isinstance(width, int) or width <= 0:
+    if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
         raise ParseError(f"{loc}: 'width' must be a positive integer")
     return ConstantOp(id=id_, op="constant", value=value, width=width)
 
@@ -203,10 +215,10 @@ def _parse_extract(raw: Dict[str, Any], loc: str) -> ExtractOp:
     id_ = _require_id(raw, loc)
     args = _require_str_list(raw, "args", loc, exact=1)
     low = raw.get("lowBit")
-    if not isinstance(low, int) or low < 0:
+    if isinstance(low, bool) or not isinstance(low, int) or low < 0:
         raise ParseError(f"{loc}: 'lowBit' must be a non-negative integer")
     width = raw.get("width")
-    if not isinstance(width, int) or width <= 0:
+    if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
         raise ParseError(f"{loc}: 'width' must be a positive integer")
     return ExtractOp(id=id_, op="extract", args=args, lowBit=low, width=width)
 
@@ -221,7 +233,7 @@ def _parse_cast(raw: Dict[str, Any], loc: str, op: str) -> CastOp:
     id_ = _require_id(raw, loc)
     args = _require_str_list(raw, "args", loc, exact=1)
     width = raw.get("width")
-    if not isinstance(width, int) or width <= 0:
+    if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
         raise ParseError(f"{loc}: 'width' must be a positive integer")
     return CastOp(id=id_, op=op, args=args, width=width)
 
@@ -243,8 +255,7 @@ def _parse_reg(raw: Dict[str, Any], loc: str) -> RegOp:
             raise ParseError(f"{loc}: 'reset' must be a string")
         if "resetValue" not in raw:
             raise ParseError(f"{loc}: 'resetValue' is required when 'reset' is provided")
-        if not isinstance(reset_value, (int, str)):
-            raise ParseError(f"{loc}: 'resetValue' must be an integer or string")
+        _require_integer_literal(reset_value, "resetValue", loc)
     else:
         if "reset" in raw and not isinstance(reset, str):
             raise ParseError(f"{loc}: 'reset' must be a string")
@@ -253,7 +264,7 @@ def _parse_reg(raw: Dict[str, Any], loc: str) -> RegOp:
         raise ParseError(f"{loc}: 'enable' must be a string")
 
     reg_width = raw.get("width", 0)
-    if not isinstance(reg_width, int) or reg_width < 0:
+    if isinstance(reg_width, bool) or not isinstance(reg_width, int) or reg_width < 0:
         raise ParseError(f"{loc}: 'width' must be a non-negative integer")
 
     return RegOp(
@@ -272,11 +283,11 @@ def _parse_mem(raw: Dict[str, Any], loc: str) -> MemOp:
             raise ParseError(f"{loc}: 'id[{i}]' must be a non-empty string")
 
     width = raw.get("width")
-    if not isinstance(width, int) or width <= 0:
+    if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
         raise ParseError(f"{loc}: 'width' must be a positive integer")
 
     depth = raw.get("depth")
-    if not isinstance(depth, int) or depth <= 0:
+    if isinstance(depth, bool) or not isinstance(depth, int) or depth <= 0:
         raise ParseError(f"{loc}: 'depth' must be a positive integer")
 
     clock = raw.get("clock")

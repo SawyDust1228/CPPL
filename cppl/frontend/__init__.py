@@ -2,4 +2,9 @@
 
 from .types import Clock, In, Out
 from .module import module, ModuleDef, PortInfo, InstanceCall
-from .compiler import compile_module, CompileResult, CompilationError
+from .compiler import (
+    CompilationError,
+    CompileResult,
+    compile_module,
+    compile_modules_with_report,
+)
