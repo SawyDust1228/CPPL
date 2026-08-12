@@ -126,7 +126,7 @@ pip install -e .
 Run the example as a normal Python script:
 
 ```bash
-python examples/cppl_demo.py
+python examples/python/cppl_demo.py
 ```
 
 ## JSON-IR Format
@@ -161,7 +161,9 @@ to 1.
 ```python
 from cppl import Interpreter
 
-sim = Interpreter.from_json(open("examples/register.json").read(), top="BasicReg")
+sim = Interpreter.from_json(
+    open("examples/json/register.json").read(), top="BasicReg"
+)
 
 print(sim.evaluate({"clk": 0, "d": 42}))  # {"q": 0}
 print(sim.evaluate({"clk": 1}))           # {"q": 42}
@@ -253,6 +255,8 @@ cppl/
 ├── frontend/          # DSL types, @module decorator, LLM compiler, prompts
 ├── ir/                # JSON-IR models, parser, validator, width inference
 ├── codegen/           # MLIR/Verilog generation via CIRCT
-examples/              # Python DSL examples
+examples/
+├── json/              # JSON-IR examples
+└── python/            # Python DSL examples
 pyproject.toml         # Package configuration
 ```

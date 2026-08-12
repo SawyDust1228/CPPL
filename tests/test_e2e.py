@@ -14,7 +14,7 @@ from cppl.ir.validator import validate_design
 from cppl.ir.infer import infer_widths
 
 PROJECT_DIR = os.path.join(os.path.dirname(__file__), "..")
-EXAMPLES_DIR = os.path.join(PROJECT_DIR, "examples")
+EXAMPLES_DIR = os.path.join(PROJECT_DIR, "examples", "json")
 CLI_CMD = ["circuitppl"]
 
 
