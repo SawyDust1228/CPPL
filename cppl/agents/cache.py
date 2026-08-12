@@ -24,7 +24,7 @@ class ModuleCache:
         self._model_identity = model_identity
 
     @staticmethod
-    def _module_contract(mod: ModuleDef) -> dict[str, Any]:
+    def build_module_contract(mod: ModuleDef) -> dict[str, Any]:
         return {
             "name": mod.name,
             "ports": [
@@ -66,7 +66,7 @@ class ModuleCache:
         payload = {
             "ir_version": IR_VERSION,
             "prompt_version": PROMPT_VERSION,
-            "module": self._module_contract(mod),
+            "module": self.build_module_contract(mod),
             "dependency_modules": dependency_modules or [],
             "model": self._model_identity,
             "config": self._config_identity,
@@ -79,7 +79,7 @@ class ModuleCache:
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
-    def _path(self, key: str) -> Path:
+    def cache_path(self, key: str) -> Path:
         return self.cache_dir / key[:2] / f"{key}.json"
 
     def load(
@@ -89,7 +89,7 @@ class ModuleCache:
     ) -> Optional[dict]:
         if not self.enabled:
             return None
-        path = self._path(key)
+        path = self.cache_path(key)
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if payload.get("key") != key:
@@ -105,7 +105,7 @@ class ModuleCache:
     def store(self, key: str, module_dict: dict) -> None:
         if not self.enabled:
             return
-        path = self._path(key)
+        path = self.cache_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "key": key,

@@ -79,6 +79,7 @@ class TestModuleErrors:
 
     def test_no_return_annotation(self):
         with pytest.raises(TypeError, match="return type annotation"):
+
             @module
             def Bad(a: In[8]):
                 """doc."""
@@ -86,12 +87,14 @@ class TestModuleErrors:
 
     def test_no_docstring(self):
         with pytest.raises(ValueError, match="non-empty docstring"):
+
             @module
             def Bad(a: In[8]) -> Out[8]:
                 pass
 
     def test_empty_docstring(self):
         with pytest.raises(ValueError, match="non-empty docstring"):
+
             @module
             def Bad(a: In[8]) -> Out[8]:
                 """"""
@@ -99,6 +102,7 @@ class TestModuleErrors:
 
     def test_param_not_port_type(self):
         with pytest.raises(TypeError, match="must be annotated with In"):
+
             @module
             def Bad(a: int) -> Out[8]:
                 """doc."""
@@ -106,6 +110,7 @@ class TestModuleErrors:
 
     def test_param_is_output_type(self):
         with pytest.raises(TypeError, match="must be an input port"):
+
             @module
             def Bad(a: Out[8]) -> Out[8]:
                 """doc."""
@@ -113,6 +118,7 @@ class TestModuleErrors:
 
     def test_return_is_input_type(self):
         with pytest.raises(TypeError, match="must be an output port"):
+
             @module
             def Bad(a: In[8]) -> In[8]:
                 """doc."""
@@ -120,6 +126,7 @@ class TestModuleErrors:
 
     def test_multi_output_contains_input(self):
         with pytest.raises(TypeError, match="must be an output port"):
+
             @module
             def Bad(a: In[8]) -> {"x": In[8]}:
                 """doc."""
@@ -127,6 +134,7 @@ class TestModuleErrors:
 
     def test_return_unsupported_type(self):
         with pytest.raises(TypeError, match="must be Out"):
+
             @module
             def Bad(a: In[8]) -> int:
                 """doc."""
@@ -136,15 +144,16 @@ class TestModuleErrors:
 class TestModuleInstantiation:
     """Test module instantiation via function-call syntax."""
 
-    def _make_adder8(self):
+    def make_adder8(self):
         @module
         def Adder8(a: In[8], b: In[8]) -> Out[8]:
             """out equals a plus b."""
             pass
+
         return Adder8
 
     def test_single_output_instance(self):
-        Adder8 = self._make_adder8()
+        Adder8 = self.make_adder8()
 
         @module
         def Top(x: In[8], y: In[8]) -> Out[8]:
@@ -175,7 +184,7 @@ class TestModuleInstantiation:
         assert inst.input_map == {"a": "d"}
 
     def test_multiple_instances(self):
-        Adder8 = self._make_adder8()
+        Adder8 = self.make_adder8()
 
         @module
         def Top(a: In[8], b: In[8], c: In[8]) -> Out[8]:
@@ -200,13 +209,13 @@ class TestModuleInstantiation:
         assert Simple.instances == []
 
     def test_call_outside_module_body_raises(self):
-        Adder8 = self._make_adder8()
+        Adder8 = self.make_adder8()
 
         with pytest.raises(RuntimeError, match="outside of a @module"):
             Adder8("x", "y")
 
     def test_fstring_description(self):
-        Adder8 = self._make_adder8()
+        Adder8 = self.make_adder8()
 
         @module
         def Top(x: In[8], y: In[8]) -> Out[8]:

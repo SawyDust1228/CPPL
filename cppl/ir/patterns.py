@@ -11,7 +11,7 @@ from .interpreter import Interpreter
 from .models import Module
 
 
-def _mismatch_message(
+def format_mismatch_message(
     module_name: str,
     pattern_name: str,
     step_index: int,
@@ -74,7 +74,7 @@ def run_patterns(
                 continue
             if any(actual.get(port) != value for port, value in expected.items()):
                 raise PatternMismatch(
-                    _mismatch_message(
+                    format_mismatch_message(
                         top, pattern.name, step_index, inputs, expected, actual
                     )
                 )

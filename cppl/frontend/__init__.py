@@ -11,7 +11,18 @@ from .compiler import (
 )
 
 __all__ = [
-    "Clock", "In", "Out", "module", "ModuleDef", "PortInfo", "InstanceCall",
-    "Case", "Sequence", "Step", "CompilationError", "CompileResult",
-    "compile_module", "compile_modules_with_report",
+    "Clock",
+    "In",
+    "Out",
+    "module",
+    "ModuleDef",
+    "PortInfo",
+    "InstanceCall",
+    "Case",
+    "Sequence",
+    "Step",
+    "CompilationError",
+    "CompileResult",
+    "compile_module",
+    "compile_modules_with_report",
 ]

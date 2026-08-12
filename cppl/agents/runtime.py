@@ -15,7 +15,7 @@ from .models import (
     ModuleCompileReport,
     ResolvedAgentConfig,
 )
-from .worker import ModuleWorker, _make_stub_dicts
+from .worker import ModuleWorker, build_stub_modules
 from ..frontend.module import ModuleDef
 from ..ir.infer import infer_widths
 from ..ir.patterns import run_patterns
@@ -45,7 +45,7 @@ class _LazyBackend:
         return self._backend
 
 
-def _dependencies(mods: list[ModuleDef]) -> dict[str, set[str]]:
+def build_dependency_map(mods: list[ModuleDef]) -> dict[str, set[str]]:
     known_names = {mod.name for mod in mods}
     dependencies: dict[str, set[str]] = {}
     for mod in mods:
@@ -57,7 +57,7 @@ def _dependencies(mods: list[ModuleDef]) -> dict[str, set[str]]:
     return dependencies
 
 
-def _dependents(dependencies: dict[str, set[str]]) -> dict[str, set[str]]:
+def build_dependent_map(dependencies: dict[str, set[str]]) -> dict[str, set[str]]:
     result = {name: set() for name in dependencies}
     for name, required in dependencies.items():
         for dependency in required:
@@ -65,7 +65,7 @@ def _dependents(dependencies: dict[str, set[str]]) -> dict[str, set[str]]:
     return result
 
 
-def _blocked_by_failure(
+def find_blocked_modules(
     failed: set[str],
     dependents: dict[str, set[str]],
 ) -> set[str]:
@@ -80,7 +80,7 @@ def _blocked_by_failure(
     return blocked
 
 
-def _transitive_dependencies(
+def collect_transitive_dependencies(
     name: str,
     dependencies: dict[str, set[str]],
 ) -> set[str]:
@@ -95,7 +95,7 @@ def _transitive_dependencies(
     return result
 
 
-def _missing_pattern_dependencies(
+def find_missing_pattern_dependencies(
     mod: ModuleDef,
     known_names: set[str],
 ) -> tuple[str, ...]:
@@ -146,8 +146,7 @@ class CompilationCoordinator:
         modules = list(mods)
         by_name = {mod.name: mod for mod in modules}
         reports = {
-            mod.name: ModuleCompileReport(module_name=mod.name)
-            for mod in modules
+            mod.name: ModuleCompileReport(module_name=mod.name) for mod in modules
         }
         if len(by_name) != len(modules):
             duplicate_error = "Duplicate ModuleDef names are not supported"
@@ -160,8 +159,8 @@ class CompilationCoordinator:
                 design_error=duplicate_error,
             )
 
-        dependencies = _dependencies(modules)
-        dependents = _dependents(dependencies)
+        dependencies = build_dependency_map(modules)
+        dependents = build_dependent_map(dependencies)
         model_identity = self._model_identity
         if model_identity is None:
             model_identity = APPLBackend.peek_model_identity()
@@ -173,24 +172,20 @@ class CompilationCoordinator:
         failed: set[str] = set()
 
         while pending:
-            blocked = _blocked_by_failure(failed, dependents)
+            blocked = find_blocked_modules(failed, dependents)
             for name in sorted(pending & blocked):
                 reports[name].status = "blocked"
                 reports[name].error_category = "DependencyFailure"
                 failed_dependencies = sorted(dependencies[name] & (failed | blocked))
-                reports[name].error = (
-                    "Blocked by failed dependency: " + ", ".join(failed_dependencies)
+                reports[name].error = "Blocked by failed dependency: " + ", ".join(
+                    failed_dependencies
                 )
                 pending.remove(name)
 
             if not pending:
                 break
 
-            ready = sorted(
-                name
-                for name in pending
-                if dependencies[name] <= completed
-            )
+            ready = sorted(name for name in pending if dependencies[name] <= completed)
             if not ready:
                 cycle = ", ".join(sorted(pending))
                 for name in pending:
@@ -212,10 +207,11 @@ class CompilationCoordinator:
                     dependency_modules=[
                         reports[mod.name].module_dict
                         for mod in modules
-                        if mod.name in _transitive_dependencies(name, dependencies)
+                        if mod.name
+                        in collect_transitive_dependencies(name, dependencies)
                         and reports[mod.name].module_dict is not None
                     ],
-                    missing_pattern_dependencies=_missing_pattern_dependencies(
+                    missing_pattern_dependencies=find_missing_pattern_dependencies(
                         by_name[name], set(by_name)
                     ),
                 )
@@ -251,7 +247,7 @@ class CompilationCoordinator:
                     failed.add(name)
 
             if failed and self.config.fail_fast:
-                blocked = _blocked_by_failure(failed, dependents)
+                blocked = find_blocked_modules(failed, dependents)
                 for name in sorted(pending):
                     if name in blocked:
                         reports[name].status = "blocked"
@@ -277,7 +273,7 @@ class CompilationCoordinator:
                     for inst in mod.instances
                     if inst.target_name not in by_name
                 ]
-                external_stubs = _make_stub_dicts(external_instances)
+                external_stubs = build_stub_modules(external_instances)
                 parsed = parse_design(external_stubs + ordered_module_dicts)
                 validate_design(parsed)
                 widths = infer_widths(parsed)
@@ -306,8 +302,7 @@ class CompilationCoordinator:
                 design_error = f"{type(exc).__name__}: {exc}"
         else:
             failed_names = [
-                name for name, report in reports.items()
-                if not report.success
+                name for name, report in reports.items() if not report.success
             ]
             design_error = "Compilation failed for: " + ", ".join(failed_names)
 

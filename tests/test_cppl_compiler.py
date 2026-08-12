@@ -15,7 +15,10 @@ from cppl.env import (
 from cppl.frontend.types import In, Out
 from cppl.frontend.module import module, ModuleDef, PortInfo, InstanceCall
 from cppl.agents.worker import (
-    _extract_json_array, _ports_dict, _instance_ops, _make_stub_dicts,
+    extract_json_array,
+    build_ports_dict,
+    build_instance_ops,
+    build_stub_modules,
 )
 from cppl.frontend.compiler import CompileResult
 from cppl.frontend.prompt import build_user_prompt, SYSTEM_PROMPT
@@ -25,36 +28,38 @@ from cppl.frontend.prompt import build_user_prompt, SYSTEM_PROMPT
 # JSON extraction
 # -----------------------------------------------------------------------
 
+
 class TestExtractJson:
     def test_plain_array(self):
         text = '[{"id":"x","op":"constant","value":0,"width":8},{"op":"output","args":{"out":"x"}}]'
-        arr = _extract_json_array(text)
+        arr = extract_json_array(text)
         assert isinstance(arr, list)
         assert len(arr) == 2
 
     def test_markdown_fenced(self):
         text = '```json\n[{"op":"output","args":{"out":"a"}}]\n```'
-        arr = _extract_json_array(text)
+        arr = extract_json_array(text)
         assert arr[0]["op"] == "output"
 
     def test_markdown_no_lang(self):
         text = '```\n[{"op":"output","args":{}}]\n```'
-        arr = _extract_json_array(text)
+        arr = extract_json_array(text)
         assert len(arr) == 1
 
     def test_with_surrounding_text(self):
         text = 'Here is the body:\n```json\n[{"op":"output","args":{}}]\n```\nDone.'
-        arr = _extract_json_array(text)
+        arr = extract_json_array(text)
         assert arr[0]["op"] == "output"
 
     def test_invalid_json_raises(self):
         with pytest.raises(json.JSONDecodeError):
-            _extract_json_array("this is not json")
+            extract_json_array("this is not json")
 
 
 # -----------------------------------------------------------------------
 # Ports dict builder
 # -----------------------------------------------------------------------
+
 
 class TestPortsDict:
     def test_basic(self):
@@ -63,7 +68,7 @@ class TestPortsDict:
             """doc."""
             pass
 
-        d = _ports_dict(M)
+        d = build_ports_dict(M)
         assert d == {
             "a": {"dir": "input", "width": 8},
             "out": {"dir": "output", "width": 1},
@@ -75,7 +80,7 @@ class TestPortsDict:
             """doc."""
             pass
 
-        d = _ports_dict(M)
+        d = build_ports_dict(M)
         assert "y" in d
         assert d["y"]["dir"] == "output"
         assert d["z"]["width"] == 1
@@ -84,6 +89,7 @@ class TestPortsDict:
 # -----------------------------------------------------------------------
 # Prompt building
 # -----------------------------------------------------------------------
+
 
 class TestPromptBuilding:
     def test_user_prompt_contains_module_name(self):
@@ -107,6 +113,7 @@ class TestPromptBuilding:
 # CompileResult dataclass
 # -----------------------------------------------------------------------
 
+
 class TestCompileResult:
     def test_success(self):
         r = CompileResult(module_dict={"name": "X"}, success=True, attempts=1)
@@ -123,6 +130,7 @@ class TestCompileResult:
 # Prompt with instances
 # -----------------------------------------------------------------------
 
+
 class TestPromptWithInstances:
     def test_user_prompt_with_instances(self):
         @module
@@ -131,7 +139,9 @@ class TestPromptWithInstances:
             pass
 
         @module
-        def ALU(op_code: In[2], op_a: In[8], op_b: In[8]) -> {"res": Out[8], "zero": Out[1]}:
+        def ALU(
+            op_code: In[2], op_a: In[8], op_b: In[8]
+        ) -> {"res": Out[8], "zero": Out[1]}:
             adder8_out = Adder8(op_a, op_b)
             return f"res = {adder8_out} when op_code is 00. zero = 1 when res is 0."
 
@@ -157,6 +167,7 @@ class TestPromptWithInstances:
 # Instance ops and stub generation
 # -----------------------------------------------------------------------
 
+
 class TestInstanceOps:
     def test_instance_ops(self):
         inst = InstanceCall(
@@ -170,7 +181,7 @@ class TestInstanceOps:
             input_map={"a": "x", "b": "y"},
             output_ids=["adder8_out"],
         )
-        ops = _instance_ops([inst])
+        ops = build_instance_ops([inst])
         assert len(ops) == 1
         assert ops[0]["op"] == "instance"
         assert ops[0]["module"] == "Adder8"
@@ -189,7 +200,7 @@ class TestInstanceOps:
             input_map={"a": "x", "b": "y"},
             output_ids=["adder8_out"],
         )
-        stubs = _make_stub_dicts([inst])
+        stubs = build_stub_modules([inst])
         assert len(stubs) == 1
         stub = stubs[0]
         assert stub["name"] == "Adder8"
@@ -216,7 +227,7 @@ class TestInstanceOps:
             input_map={"a": "p", "b": "q"},
             output_ids=["adder8_out_1"],
         )
-        stubs = _make_stub_dicts([inst1, inst2])
+        stubs = build_stub_modules([inst1, inst2])
         assert len(stubs) == 1
 
 

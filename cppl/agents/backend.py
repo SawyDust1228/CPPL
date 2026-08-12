@@ -29,10 +29,10 @@ class APPLBackend:
 
     def __init__(self, config: ResolvedAgentConfig) -> None:
         self.config = config
-        self._configure()
+        self.configure_backend()
 
     @classmethod
-    def _configure(cls) -> None:
+    def configure_backend(cls) -> None:
         with cls._configure_lock:
             if cls._configured:
                 return
@@ -95,7 +95,7 @@ class APPLBackend:
                 last_error = exc
                 if retry >= self.config.transport_retries:
                     break
-                time.sleep(min(2 ** retry, 4))
+                time.sleep(min(2**retry, 4))
         raise LLMBackendError(
             "LLM request failed after "
             f"{self.config.transport_retries + 1} transport attempt(s): "

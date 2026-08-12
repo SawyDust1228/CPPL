@@ -10,7 +10,9 @@ from cppl.ir.infer import infer_widths
 from cppl.ir.parser import parse_design
 
 
-def _single_op(op, *, width=8, output_width=None, extra_ports=None):
+def build_single_operation_simulator(
+    op, *, width=8, output_width=None, extra_ports=None
+):
     output_width = width if output_width is None else output_width
     ports = {
         "a": {"dir": "input", "width": width},
@@ -18,11 +20,15 @@ def _single_op(op, *, width=8, output_width=None, extra_ports=None):
         "o": {"dir": "output", "width": output_width},
     }
     ports.update(extra_ports or {})
-    return Interpreter.from_json([{
-        "name": "Top",
-        "ports": ports,
-        "body": [op, {"op": "output", "args": {"o": op["id"]}}],
-    }])
+    return Interpreter.from_json(
+        [
+            {
+                "name": "Top",
+                "ports": ports,
+                "body": [op, {"op": "output", "args": {"o": op["id"]}}],
+            }
+        ]
+    )
 
 
 class TestCombinational:
@@ -45,7 +51,9 @@ class TestCombinational:
         ],
     )
     def test_binary_ops(self, op, a, b, expected):
-        sim = _single_op({"id": "r", "op": op, "args": ["a", "b"]})
+        sim = build_single_operation_simulator(
+            {"id": "r", "op": op, "args": ["a", "b"]}
+        )
         assert sim.evaluate({"a": a, "b": b}) == {"o": expected}
 
     @pytest.mark.parametrize(
@@ -64,7 +72,7 @@ class TestCombinational:
         ],
     )
     def test_compare_ops(self, op, a, b, expected):
-        sim = _single_op(
+        sim = build_single_operation_simulator(
             {"id": "r", "op": op, "args": ["a", "b"]}, output_width=1
         )
         assert sim.evaluate({"a": a, "b": b}) == {"o": expected}
@@ -81,37 +89,51 @@ class TestCombinational:
         ],
     )
     def test_unary_ops(self, op, value, expected, output_width):
-        sim = _single_op(
+        sim = build_single_operation_simulator(
             {"id": "r", "op": op, "args": ["a"]},
             output_width=output_width,
         )
         assert sim.evaluate({"a": value}) == {"o": expected}
 
     def test_concat_extract_mux_and_casts(self):
-        raw = [{
-            "name": "Top",
-            "ports": {
-                "a": {"dir": "input", "width": 4},
-                "b": {"dir": "input", "width": 4},
-                "sel": {"dir": "input", "width": 1},
-                "concat": {"dir": "output", "width": 8},
-                "extract": {"dir": "output", "width": 3},
-                "muxed": {"dir": "output", "width": 4},
-                "sext": {"dir": "output", "width": 8},
-                "zext": {"dir": "output", "width": 8},
-            },
-            "body": [
-                {"id": "c", "op": "concat", "args": ["a", "b"]},
-                {"id": "e", "op": "extract", "args": ["c"], "lowBit": 2, "width": 3},
-                {"id": "m", "op": "mux", "args": ["sel", "a", "b"]},
-                {"id": "s", "op": "sext", "args": ["a"], "width": 8},
-                {"id": "z", "op": "zext", "args": ["a"], "width": 8},
-                {"op": "output", "args": {
-                    "concat": "c", "extract": "e", "muxed": "m",
-                    "sext": "s", "zext": "z",
-                }},
-            ],
-        }]
+        raw = [
+            {
+                "name": "Top",
+                "ports": {
+                    "a": {"dir": "input", "width": 4},
+                    "b": {"dir": "input", "width": 4},
+                    "sel": {"dir": "input", "width": 1},
+                    "concat": {"dir": "output", "width": 8},
+                    "extract": {"dir": "output", "width": 3},
+                    "muxed": {"dir": "output", "width": 4},
+                    "sext": {"dir": "output", "width": 8},
+                    "zext": {"dir": "output", "width": 8},
+                },
+                "body": [
+                    {"id": "c", "op": "concat", "args": ["a", "b"]},
+                    {
+                        "id": "e",
+                        "op": "extract",
+                        "args": ["c"],
+                        "lowBit": 2,
+                        "width": 3,
+                    },
+                    {"id": "m", "op": "mux", "args": ["sel", "a", "b"]},
+                    {"id": "s", "op": "sext", "args": ["a"], "width": 8},
+                    {"id": "z", "op": "zext", "args": ["a"], "width": 8},
+                    {
+                        "op": "output",
+                        "args": {
+                            "concat": "c",
+                            "extract": "e",
+                            "muxed": "m",
+                            "sext": "s",
+                            "zext": "z",
+                        },
+                    },
+                ],
+            }
+        ]
         sim = Interpreter.from_json(raw)
         assert sim.evaluate({"a": 0xA, "b": 0x3, "sel": 1}) == {
             "concat": 0xA3,
@@ -122,44 +144,57 @@ class TestCombinational:
         }
 
     def test_forward_reference_and_input_truncation(self):
-        raw = [{
-            "name": "Top",
-            "ports": {
-                "a": {"dir": "input", "width": 8},
-                "o": {"dir": "output", "width": 8},
-            },
-            "body": [
-                {"id": "sum", "op": "add", "args": ["a", "one"]},
-                {"id": "one", "op": "constant", "value": 1, "width": 8},
-                {"op": "output", "args": {"o": "sum"}},
-            ],
-        }]
+        raw = [
+            {
+                "name": "Top",
+                "ports": {
+                    "a": {"dir": "input", "width": 8},
+                    "o": {"dir": "output", "width": 8},
+                },
+                "body": [
+                    {"id": "sum", "op": "add", "args": ["a", "one"]},
+                    {"id": "one", "op": "constant", "value": 1, "width": 8},
+                    {"op": "output", "args": {"o": "sum"}},
+                ],
+            }
+        ]
         sim = Interpreter.from_json(raw)
         assert sim.evaluate({"a": 0x1FF}) == {"o": 0}
         assert sim.peek("Top.sum") == 0
 
     @pytest.mark.parametrize("op", ["div", "div_s", "mod_u", "mod_s"])
     def test_division_by_zero(self, op):
-        sim = _single_op({"id": "r", "op": op, "args": ["a", "b"]})
+        sim = build_single_operation_simulator(
+            {"id": "r", "op": op, "args": ["a", "b"]}
+        )
         with pytest.raises(SimulationError, match="Division by zero"):
             sim.evaluate({"a": 1, "b": 0})
 
 
-REG_JSON = [{
-    "name": "Reg",
-    "ports": {
-        "clk": {"dir": "input", "width": 1, "type": "clock"},
-        "rst": {"dir": "input", "width": 1},
-        "en": {"dir": "input", "width": 1},
-        "d": {"dir": "input", "width": 8},
-        "q": {"dir": "output", "width": 8},
-    },
-    "body": [
-        {"id": "q_reg", "op": "reg", "args": ["d"], "clock": "clk",
-         "reset": "rst", "resetValue": "0x5a", "enable": "en"},
-        {"op": "output", "args": {"q": "q_reg"}},
-    ],
-}]
+REG_JSON = [
+    {
+        "name": "Reg",
+        "ports": {
+            "clk": {"dir": "input", "width": 1, "type": "clock"},
+            "rst": {"dir": "input", "width": 1},
+            "en": {"dir": "input", "width": 1},
+            "d": {"dir": "input", "width": 8},
+            "q": {"dir": "output", "width": 8},
+        },
+        "body": [
+            {
+                "id": "q_reg",
+                "op": "reg",
+                "args": ["d"],
+                "clock": "clk",
+                "reset": "rst",
+                "resetValue": "0x5a",
+                "enable": "en",
+            },
+            {"op": "output", "args": {"q": "q_reg"}},
+        ],
+    }
+]
 
 
 class TestRegisters:
@@ -177,56 +212,73 @@ class TestRegisters:
         assert sim.peek_outputs() == {"q": 0}
 
     def test_two_clock_domains_update_independently(self):
-        raw = [{
-            "name": "Top",
-            "ports": {
-                "c1": {"dir": "input", "width": 1},
-                "c2": {"dir": "input", "width": 1},
-                "d1": {"dir": "input", "width": 8},
-                "d2": {"dir": "input", "width": 8},
-                "q1": {"dir": "output", "width": 8},
-                "q2": {"dir": "output", "width": 8},
-            },
-            "body": [
-                {"id": "r1", "op": "reg", "args": ["d1"], "clock": "c1"},
-                {"id": "r2", "op": "reg", "args": ["d2"], "clock": "c2"},
-                {"op": "output", "args": {"q1": "r1", "q2": "r2"}},
-            ],
-        }]
+        raw = [
+            {
+                "name": "Top",
+                "ports": {
+                    "c1": {"dir": "input", "width": 1},
+                    "c2": {"dir": "input", "width": 1},
+                    "d1": {"dir": "input", "width": 8},
+                    "d2": {"dir": "input", "width": 8},
+                    "q1": {"dir": "output", "width": 8},
+                    "q2": {"dir": "output", "width": 8},
+                },
+                "body": [
+                    {"id": "r1", "op": "reg", "args": ["d1"], "clock": "c1"},
+                    {"id": "r2", "op": "reg", "args": ["d2"], "clock": "c2"},
+                    {"op": "output", "args": {"q1": "r1", "q2": "r2"}},
+                ],
+            }
+        ]
         sim = Interpreter.from_json(raw)
         assert sim.evaluate({"d1": 1, "d2": 2, "c1": 1}) == {"q1": 1, "q2": 0}
         assert sim.evaluate({"c1": 0, "c2": 1}) == {"q1": 1, "q2": 2}
 
 
-MEM_JSON = [{
-    "name": "MemTop",
-    "ports": {
-        "clk": {"dir": "input", "width": 1},
-        "rst": {"dir": "input", "width": 1},
-        "raddr": {"dir": "input", "width": 2},
-        "waddr": {"dir": "input", "width": 2},
-        "wdata": {"dir": "input", "width": 8},
-        "ren": {"dir": "input", "width": 1},
-        "wen": {"dir": "input", "width": 1},
-        "rdata": {"dir": "output", "width": 8},
-    },
-    "body": [
-        {"id": ["rd"], "op": "mem", "width": 8, "depth": 4,
-         "clock": "clk", "reset": "rst", "name": "storage",
-         "reads": [{"addr": "raddr", "enable": "ren"}],
-         "writes": [{"addr": "waddr", "data": "wdata", "enable": "wen"}]},
-        {"op": "output", "args": {"rdata": "rd"}},
-    ],
-}]
+MEM_JSON = [
+    {
+        "name": "MemTop",
+        "ports": {
+            "clk": {"dir": "input", "width": 1},
+            "rst": {"dir": "input", "width": 1},
+            "raddr": {"dir": "input", "width": 2},
+            "waddr": {"dir": "input", "width": 2},
+            "wdata": {"dir": "input", "width": 8},
+            "ren": {"dir": "input", "width": 1},
+            "wen": {"dir": "input", "width": 1},
+            "rdata": {"dir": "output", "width": 8},
+        },
+        "body": [
+            {
+                "id": ["rd"],
+                "op": "mem",
+                "width": 8,
+                "depth": 4,
+                "clock": "clk",
+                "reset": "rst",
+                "name": "storage",
+                "reads": [{"addr": "raddr", "enable": "ren"}],
+                "writes": [{"addr": "waddr", "data": "wdata", "enable": "wen"}],
+            },
+            {"op": "output", "args": {"rdata": "rd"}},
+        ],
+    }
+]
 
 
 class TestMemory:
     def test_combinational_read_synchronous_write_and_reset(self):
         sim = Interpreter.from_json(MEM_JSON)
-        assert sim.evaluate({
-            "clk": 0, "raddr": 2, "waddr": 2, "wdata": 0xAB,
-            "ren": 1, "wen": 1,
-        }) == {"rdata": 0}
+        assert sim.evaluate(
+            {
+                "clk": 0,
+                "raddr": 2,
+                "waddr": 2,
+                "wdata": 0xAB,
+                "ren": 1,
+                "wen": 1,
+            }
+        ) == {"rdata": 0}
         assert sim.evaluate({"clk": 1}) == {"rdata": 0xAB}
         assert sim.peek_memory("storage") == (0, 0, 0xAB, 0)
         assert sim.evaluate({"ren": 0}) == {"rdata": 0}
@@ -296,10 +348,19 @@ class TestHierarchyAndAPI:
                     "qb": {"dir": "output", "width": 8},
                 },
                 "body": [
-                    {"id": ["x"], "op": "instance", "module": "Child",
-                     "name": "left", "args": {"clk": "clk", "d": "a"}},
-                    {"id": ["y"], "op": "instance", "module": "Child",
-                     "args": {"clk": "clk", "d": "b"}},
+                    {
+                        "id": ["x"],
+                        "op": "instance",
+                        "module": "Child",
+                        "name": "left",
+                        "args": {"clk": "clk", "d": "a"},
+                    },
+                    {
+                        "id": ["y"],
+                        "op": "instance",
+                        "module": "Child",
+                        "args": {"clk": "clk", "d": "b"},
+                    },
                     {"op": "output", "args": {"qa": "x", "qb": "y"}},
                 ],
             },
@@ -312,12 +373,22 @@ class TestHierarchyAndAPI:
 
     def test_multiple_roots_require_top(self):
         raw = [
-            {"name": "A", "ports": {"o": {"dir": "output", "width": 1}},
-             "body": [{"id": "z", "op": "constant", "value": 0, "width": 1},
-                      {"op": "output", "args": {"o": "z"}}]},
-            {"name": "B", "ports": {"o": {"dir": "output", "width": 1}},
-             "body": [{"id": "z", "op": "constant", "value": 0, "width": 1},
-                      {"op": "output", "args": {"o": "z"}}]},
+            {
+                "name": "A",
+                "ports": {"o": {"dir": "output", "width": 1}},
+                "body": [
+                    {"id": "z", "op": "constant", "value": 0, "width": 1},
+                    {"op": "output", "args": {"o": "z"}},
+                ],
+            },
+            {
+                "name": "B",
+                "ports": {"o": {"dir": "output", "width": 1}},
+                "body": [
+                    {"id": "z", "op": "constant", "value": 0, "width": 1},
+                    {"op": "output", "args": {"o": "z"}},
+                ],
+            },
         ]
         with pytest.raises(SimulationError, match="multiple root modules"):
             Interpreter.from_json(raw)
@@ -335,9 +406,13 @@ class TestHierarchyAndAPI:
                 "body": [
                     {"id": "one", "op": "constant", "value": 1, "width": 8},
                     {"id": "dep", "op": "add", "args": ["feedback", "one"]},
-                    {"op": "output", "args": {
-                        "independent": "one", "dependent": "dep",
-                    }},
+                    {
+                        "op": "output",
+                        "args": {
+                            "independent": "one",
+                            "dependent": "dep",
+                        },
+                    },
                 ],
             },
             {
@@ -352,10 +427,18 @@ class TestHierarchyAndAPI:
                 "name": "Top",
                 "ports": {"o": {"dir": "output", "width": 8}},
                 "body": [
-                    {"id": ["first", "result"], "op": "instance",
-                     "module": "Producer", "args": {"feedback": "loopback"}},
-                    {"id": ["loopback"], "op": "instance", "module": "Consumer",
-                     "args": {"value": "first"}},
+                    {
+                        "id": ["first", "result"],
+                        "op": "instance",
+                        "module": "Producer",
+                        "args": {"feedback": "loopback"},
+                    },
+                    {
+                        "id": ["loopback"],
+                        "op": "instance",
+                        "module": "Consumer",
+                        "args": {"value": "first"},
+                    },
                     {"op": "output", "args": {"o": "result"}},
                 ],
             },
@@ -367,7 +450,9 @@ class TestHierarchyAndAPI:
         modules = parse_design(REG_JSON)
         widths = infer_widths(modules)
         design = Design()
-        monkeypatch.setattr(design, "_ir_pipeline", lambda max_retries=3: (modules, widths))
+        monkeypatch.setattr(
+            design, "run_ir_pipeline", lambda max_retries=3: (modules, widths)
+        )
         sim = design.interpreter(top="Reg")
         assert isinstance(sim, Interpreter)
 

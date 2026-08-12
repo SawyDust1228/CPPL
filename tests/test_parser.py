@@ -46,65 +46,84 @@ class TestParseDesign:
 
     def test_invalid_port_dir(self):
         with pytest.raises(ParseError, match="dir"):
-            parse_design('{"name":"A","ports":{"x":{"dir":"inout","width":1}},"body":[]}')
+            parse_design(
+                '{"name":"A","ports":{"x":{"dir":"inout","width":1}},"body":[]}'
+            )
 
     def test_invalid_port_width(self):
         with pytest.raises(ParseError, match="width"):
-            parse_design('{"name":"A","ports":{"x":{"dir":"input","width":0}},"body":[]}')
+            parse_design(
+                '{"name":"A","ports":{"x":{"dir":"input","width":0}},"body":[]}'
+            )
 
     def test_unknown_op(self):
         raw = '{"name":"A","ports":{"x":{"dir":"input","width":1}},"body":[{"op":"foobar"}]}'
         with pytest.raises(ParseError, match="unknown op"):
             parse_design(raw)
 
+
 class TestParseOperations:
-    def _module(self, body_json: str) -> Module:
+    def parse_test_module(self, body_json: str) -> Module:
         raw = f'{{"name":"M","ports":{{"a":{{"dir":"input","width":8}},"out":{{"dir":"output","width":8}}}},"body":[{body_json}]}}'
         return parse_design(raw)[0]
 
     def test_constant(self):
-        mod = self._module('{"id":"c","op":"constant","value":42,"width":8},{"op":"output","args":{"out":"c"}}')
+        mod = self.parse_test_module(
+            '{"id":"c","op":"constant","value":42,"width":8},{"op":"output","args":{"out":"c"}}'
+        )
         assert isinstance(mod.body[0], ConstantOp)
         assert mod.body[0].value == 42
         assert mod.body[0].width == 8
 
     def test_constant_hex_string(self):
-        mod = self._module('{"id":"c","op":"constant","value":"0xff","width":8},{"op":"output","args":{"out":"c"}}')
+        mod = self.parse_test_module(
+            '{"id":"c","op":"constant","value":"0xff","width":8},{"op":"output","args":{"out":"c"}}'
+        )
         assert isinstance(mod.body[0], ConstantOp)
         assert mod.body[0].value == "0xff"
 
     def test_unary_not(self):
-        mod = self._module('{"id":"n","op":"not","args":["a"]},{"op":"output","args":{"out":"n"}}')
+        mod = self.parse_test_module(
+            '{"id":"n","op":"not","args":["a"]},{"op":"output","args":{"out":"n"}}'
+        )
         op = mod.body[0]
         assert isinstance(op, UnaryOp)
         assert op.op == "not"
         assert op.args == ["a"]
 
     def test_binary_add(self):
-        mod = self._module('{"id":"s","op":"add","args":["a","a"]},{"op":"output","args":{"out":"s"}}')
+        mod = self.parse_test_module(
+            '{"id":"s","op":"add","args":["a","a"]},{"op":"output","args":{"out":"s"}}'
+        )
         op = mod.body[0]
         assert isinstance(op, BinaryOp)
         assert op.args == ["a", "a"]
 
     def test_binary_wrong_arg_count(self):
         with pytest.raises(ParseError, match="exactly 2"):
-            self._module('{"id":"s","op":"add","args":["a"]},{"op":"output","args":{"out":"s"}}')
+            self.parse_test_module(
+                '{"id":"s","op":"add","args":["a"]},{"op":"output","args":{"out":"s"}}'
+            )
 
     def test_variadic_concat(self):
-        mod = self._module('{"id":"c","op":"concat","args":["a","a"]},{"op":"output","args":{"out":"c"}}')
+        mod = self.parse_test_module(
+            '{"id":"c","op":"concat","args":["a","a"]},{"op":"output","args":{"out":"c"}}'
+        )
         op = mod.body[0]
         assert isinstance(op, VariadicOp)
         assert op.args == ["a", "a"]
 
     def test_extract(self):
-        mod = self._module('{"id":"e","op":"extract","args":["a"],"lowBit":0,"width":4},{"op":"output","args":{"out":"e"}}')
+        mod = self.parse_test_module(
+            '{"id":"e","op":"extract","args":["a"],"lowBit":0,"width":4},{"op":"output","args":{"out":"e"}}'
+        )
         op = mod.body[0]
         assert isinstance(op, ExtractOp)
         assert op.lowBit == 0
         assert op.width == 4
 
     def test_instance(self):
-        raw = '''[
+        raw = """[
           {"name":"Sub","ports":{"i":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[{"op":"output","args":{"o":"i"}}]},
           {"name":"Top","ports":{"a":{"dir":"input","width":8},"out":{"dir":"output","width":8}},
@@ -112,7 +131,7 @@ class TestParseOperations:
              {"id":["r"],"op":"instance","module":"Sub","args":{"i":"a"}},
              {"op":"output","args":{"out":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         inst = modules[1].body[0]
         assert isinstance(inst, InstanceOp)
@@ -120,19 +139,19 @@ class TestParseOperations:
         assert inst.id == ["r"]
 
     def test_output(self):
-        mod = self._module('{"op":"output","args":{"out":"a"}}')
+        mod = self.parse_test_module('{"op":"output","args":{"out":"a"}}')
         op = mod.body[0]
         assert isinstance(op, OutputOp)
         assert op.args == {"out": "a"}
 
     def test_reg_basic(self):
-        raw = '''{
+        raw = """{
           "name":"M","ports":{"clk":{"dir":"input","width":1},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
           "body":[
             {"id":"r","op":"reg","args":["d"],"clock":"clk"},
             {"op":"output","args":{"q":"r"}}
           ]
-        }'''
+        }"""
         mod = parse_design(raw)[0]
         op = mod.body[0]
         assert isinstance(op, RegOp)
@@ -143,13 +162,13 @@ class TestParseOperations:
         assert op.enable == ""
 
     def test_reg_with_reset(self):
-        raw = '''{
+        raw = """{
           "name":"M","ports":{"clk":{"dir":"input","width":1},"rst":{"dir":"input","width":1},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
           "body":[
             {"id":"r","op":"reg","args":["d"],"clock":"clk","reset":"rst","resetValue":0},
             {"op":"output","args":{"q":"r"}}
           ]
-        }'''
+        }"""
         mod = parse_design(raw)[0]
         op = mod.body[0]
         assert isinstance(op, RegOp)
@@ -157,26 +176,26 @@ class TestParseOperations:
         assert op.resetValue == 0
 
     def test_reg_with_enable(self):
-        raw = '''{
+        raw = """{
           "name":"M","ports":{"clk":{"dir":"input","width":1},"en":{"dir":"input","width":1},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
           "body":[
             {"id":"r","op":"reg","args":["d"],"clock":"clk","enable":"en"},
             {"op":"output","args":{"q":"r"}}
           ]
-        }'''
+        }"""
         mod = parse_design(raw)[0]
         op = mod.body[0]
         assert isinstance(op, RegOp)
         assert op.enable == "en"
 
     def test_reg_full(self):
-        raw = '''{
+        raw = """{
           "name":"M","ports":{"clk":{"dir":"input","width":1},"rst":{"dir":"input","width":1},"en":{"dir":"input","width":1},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
           "body":[
             {"id":"r","op":"reg","args":["d"],"clock":"clk","reset":"rst","resetValue":0,"enable":"en"},
             {"op":"output","args":{"q":"r"}}
           ]
-        }'''
+        }"""
         mod = parse_design(raw)[0]
         op = mod.body[0]
         assert isinstance(op, RegOp)
@@ -187,28 +206,32 @@ class TestParseOperations:
 
     def test_reg_missing_clock(self):
         with pytest.raises(ParseError, match="clock"):
-            parse_design('''{
+            parse_design(
+                """{
               "name":"M","ports":{"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
               "body":[
                 {"id":"r","op":"reg","args":["d"]},
                 {"op":"output","args":{"q":"r"}}
               ]
-            }''')
+            }"""
+            )
 
     def test_reg_reset_without_resetValue(self):
         with pytest.raises(ParseError, match="resetValue.*required"):
-            parse_design('''{
+            parse_design(
+                """{
               "name":"M","ports":{"clk":{"dir":"input","width":1},"rst":{"dir":"input","width":1},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
               "body":[
                 {"id":"r","op":"reg","args":["d"],"clock":"clk","reset":"rst"},
                 {"op":"output","args":{"q":"r"}}
               ]
-            }''')
+            }"""
+            )
 
 
 class TestParseMem:
     def test_mem_op(self):
-        raw = '''{
+        raw = """{
           "name":"M",
           "ports":{
             "clk":{"dir":"input","width":1},
@@ -226,7 +249,7 @@ class TestParseMem:
              "writes":[{"addr":"addr","data":"wdata","enable":"wen"}]},
             {"op":"output","args":{"rdata":"rd"}}
           ]
-        }'''
+        }"""
         mod = parse_design(raw)[0]
         op = mod.body[0]
         assert isinstance(op, MemOp)
@@ -239,7 +262,7 @@ class TestParseMem:
         assert op.writes == (("addr", "wdata", "wen"),)
 
     def test_mem_id_reads_mismatch(self):
-        raw = '''{
+        raw = """{
           "name":"M",
           "ports":{
             "clk":{"dir":"input","width":1},"rst":{"dir":"input","width":1},
@@ -253,12 +276,12 @@ class TestParseMem:
              "writes":[]},
             {"op":"output","args":{"rdata":"rd1"}}
           ]
-        }'''
+        }"""
         with pytest.raises(ParseError, match="one output id per read port"):
             parse_design(raw)
 
     def test_mem_missing_clock(self):
-        raw = '''{
+        raw = """{
           "name":"M",
           "ports":{"rst":{"dir":"input","width":1},"o":{"dir":"output","width":32}},
           "body":[
@@ -266,6 +289,6 @@ class TestParseMem:
              "reset":"rst","reads":[{"addr":"x","enable":"y"}],"writes":[]},
             {"op":"output","args":{"o":"rd"}}
           ]
-        }'''
+        }"""
         with pytest.raises(ParseError, match="clock"):
             parse_design(raw)

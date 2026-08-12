@@ -39,7 +39,7 @@ def load_dotenv() -> None:
         if not line or line.startswith("#"):
             continue
         if line.startswith("export "):
-            line = line[len("export "):].strip()
+            line = line[len("export ") :].strip()
         if "=" not in line:
             continue
 
@@ -48,18 +48,14 @@ def load_dotenv() -> None:
         value = value.strip()
         if not key:
             continue
-        if (
-            len(value) >= 2
-            and value[0] == value[-1]
-            and value[0] in {"'", '"'}
-        ):
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
         os.environ.setdefault(key, value)
 
     _ENV_LOADED = True
 
 
-def _sanitize_env_token(token: str) -> str:
+def sanitize_env_token(token: str) -> str:
     """Normalize provider names for environment variable prefix matching."""
     return re.sub(r"[^A-Za-z0-9]+", "_", token).strip("_").upper()
 
@@ -81,7 +77,7 @@ def provider_env_prefixes(provider: Optional[str]) -> list[str]:
 
     prefixes: list[str] = []
     for token in provider.split("/"):
-        sanitized = _sanitize_env_token(token)
+        sanitized = sanitize_env_token(token)
         if sanitized and sanitized not in prefixes:
             prefixes.append(sanitized)
 
@@ -98,7 +94,9 @@ def provider_env_prefixes(provider: Optional[str]) -> list[str]:
     return prefixes
 
 
-def resolve_provider_specific_env(provider: Optional[str], suffix: str) -> Optional[str]:
+def resolve_provider_specific_env(
+    provider: Optional[str], suffix: str
+) -> Optional[str]:
     """Return the first provider-specific env var value for one suffix."""
     env_names = [f"{prefix}_{suffix}" for prefix in provider_env_prefixes(provider)]
     if not env_names:

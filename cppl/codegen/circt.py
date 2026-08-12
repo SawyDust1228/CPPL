@@ -51,7 +51,7 @@ from ..ir.models import (
 from ..ir.infer import ValueInfo
 
 
-def _iN(width: int) -> IntegerType:
+def integer_type(width: int) -> IntegerType:
     return IntegerType.get_signless(width)
 
 
@@ -70,31 +70,31 @@ class _ModuleEmitter:
         self._env: Dict[str, Value] = {}  # JSON-IR id -> MLIR Value
         self._instance_counter = 0
 
-    def _width(self, id_: str) -> int:
+    def value_width(self, id_: str) -> int:
         info = self.widths.get(id_)
         if info is None:
             raise CodegenError(f"No inferred width for '{id_}'")
         return info.width
 
-    def _val(self, id_: str) -> Value:
+    def get_value(self, id_: str) -> Value:
         v = self._env.get(id_)
         if v is None:
             raise CodegenError(f"No MLIR value for '{id_}'")
         return v
 
-    def _clock_val(self, id_: str) -> Value:
-        value = self._val(id_)
+    def get_clock_value(self, id_: str) -> Value:
+        value = self.get_value(id_)
         port = self.mod.ports.get(id_)
         if port is not None and port.type == "clock":
             return value
         return seq.to_clock(value)
 
-    def _fresh_instance_name(self, module_name: str) -> str:
+    def fresh_instance_name(self, module_name: str) -> str:
         name = f"{module_name.lower()}_{self._instance_counter}"
         self._instance_counter += 1
         return name
 
-    def _args_ready(self, op: Operation) -> bool:
+    def arguments_ready(self, op: Operation) -> bool:
         """Check whether all operand references are available in _env."""
         if isinstance(op, ConstantOp):
             return True
@@ -121,7 +121,11 @@ class _ModuleEmitter:
                 if addr not in self._env or enable not in self._env:
                     return False
             for addr, data, enable in op.writes:
-                if addr not in self._env or data not in self._env or enable not in self._env:
+                if (
+                    addr not in self._env
+                    or data not in self._env
+                    or enable not in self._env
+                ):
                     return False
             return True
         else:
@@ -133,13 +137,17 @@ class _ModuleEmitter:
         in_ports = [
             (
                 name,
-                seq.ClockType.get() if pdef.type == "clock" else _iN(pdef.width),
+                (
+                    seq.ClockType.get()
+                    if pdef.type == "clock"
+                    else integer_type(pdef.width)
+                ),
             )
             for name, pdef in self.mod.ports.items()
             if pdef.dir == PortDir.INPUT
         ]
         out_ports = [
-            (name, _iN(pdef.width))
+            (name, integer_type(pdef.width))
             for name, pdef in self.mod.ports.items()
             if pdef.dir == PortDir.OUTPUT
         ]
@@ -155,10 +163,10 @@ class _ModuleEmitter:
             reg_placeholders: dict = {}  # op.id -> placeholder op
             for op in emitter.mod.body:
                 if isinstance(op, RegOp):
-                    w = emitter._width(op.id)
+                    w = emitter.value_width(op.id)
                     placeholder = MLIROperation.create(
                         "builtin.unrealized_conversion_cast",
-                        results=[_iN(w)],
+                        results=[integer_type(w)],
                     )
                     emitter._env[op.id] = placeholder.result
                     reg_placeholders[op.id] = placeholder
@@ -167,24 +175,23 @@ class _ModuleEmitter:
             for op in emitter.mod.body:
                 if isinstance(op, (InstanceOp, MemOp)):
                     for id_ in op.id:
-                        w = emitter._width(id_)
+                        w = emitter.value_width(id_)
                         placeholder = MLIROperation.create(
                             "builtin.unrealized_conversion_cast",
-                            results=[_iN(w)],
+                            results=[integer_type(w)],
                         )
                         emitter._env[id_] = placeholder.result
                         inst_placeholders[id_] = placeholder
 
             pending = [
-                op for op in emitter.mod.body
-                if not isinstance(op, (RegOp, OutputOp))
+                op for op in emitter.mod.body if not isinstance(op, (RegOp, OutputOp))
             ]
             while pending:
                 still_pending = []
                 progress = False
                 for op in pending:
-                    if emitter._args_ready(op):
-                        emitter._emit_op(op)
+                    if emitter.arguments_ready(op):
+                        emitter.emit_operation(op)
                         if isinstance(op, (InstanceOp, MemOp)):
                             for id_ in op.id:
                                 if id_ in inst_placeholders:
@@ -196,24 +203,21 @@ class _ModuleEmitter:
                     else:
                         still_pending.append(op)
                 if not progress and still_pending:
-                    emitter._emit_op(still_pending[0])
+                    emitter.emit_operation(still_pending[0])
                 pending = still_pending
 
             for op in emitter.mod.body:
                 if not isinstance(op, RegOp):
                     continue
                 old_placeholder = reg_placeholders[op.id]
-                emitter._emit_reg(op)
+                emitter.emit_register(op)
                 actual_val = emitter._env[op.id]
                 old_placeholder.result.replace_all_uses_with(actual_val)
                 old_placeholder.erase()
 
             last = emitter.mod.body[-1]
             assert isinstance(last, OutputOp)
-            return {
-                pname: emitter._val(ref)
-                for pname, ref in last.args.items()
-            }
+            return {pname: emitter.get_value(ref) for pname, ref in last.args.items()}
 
         hw.HWModuleOp(
             name=self.mod.name,
@@ -222,61 +226,61 @@ class _ModuleEmitter:
             body_builder=body_builder,
         )
 
-    def _emit_op(self, op: Operation) -> None:
+    def emit_operation(self, op: Operation) -> None:
         if isinstance(op, ConstantOp):
-            self._emit_constant(op)
+            self.emit_constant(op)
         elif isinstance(op, UnaryOp):
-            self._emit_unary(op)
+            self.emit_unary(op)
         elif isinstance(op, BinaryOp):
-            self._emit_binary(op)
+            self.emit_binary(op)
         elif isinstance(op, VariadicOp):
-            self._emit_variadic(op)
+            self.emit_variadic(op)
         elif isinstance(op, ExtractOp):
-            self._emit_extract(op)
+            self.emit_extract(op)
         elif isinstance(op, MuxOp):
-            self._emit_mux(op)
+            self.emit_mux(op)
         elif isinstance(op, CastOp):
-            self._emit_cast(op)
+            self.emit_cast(op)
         elif isinstance(op, RegOp):
-            self._emit_reg(op)
+            self.emit_register(op)
         elif isinstance(op, MemOp):
-            self._emit_mem(op)
+            self.emit_memory(op)
         elif isinstance(op, InstanceOp):
-            self._emit_instance(op)
+            self.emit_instance(op)
         elif isinstance(op, OutputOp):
             pass  # handled by body_builder return
 
-    def _emit_constant(self, op: ConstantOp) -> None:
+    def emit_constant(self, op: ConstantOp) -> None:
         if isinstance(op.value, str):
             val = int(op.value, 0)
         else:
             val = op.value
-        attr = IntegerAttr.get(_iN(op.width), val)
+        attr = IntegerAttr.get(integer_type(op.width), val)
         result = hw.ConstantOp(attr).result
         self._env[op.id] = result
 
-    def _emit_unary(self, op: UnaryOp) -> None:
-        src = self._val(op.args[0])
-        w = self._width(op.args[0])
+    def emit_unary(self, op: UnaryOp) -> None:
+        src = self.get_value(op.args[0])
+        w = self.value_width(op.args[0])
 
         if op.op == "not":
             # ~x == x ^ all_ones
-            allones = hw.ConstantOp(IntegerAttr.get(_iN(w), -1)).result
+            allones = hw.ConstantOp(IntegerAttr.get(integer_type(w), -1)).result
             self._env[op.id] = comb.xor([src, allones])
         elif op.op == "neg":
             # -x == ~x + 1 == (x ^ all_ones) + 1
-            allones = hw.ConstantOp(IntegerAttr.get(_iN(w), -1)).result
+            allones = hw.ConstantOp(IntegerAttr.get(integer_type(w), -1)).result
             xored = comb.xor([src, allones])
-            one = hw.ConstantOp(IntegerAttr.get(_iN(w), 1)).result
+            one = hw.ConstantOp(IntegerAttr.get(integer_type(w), 1)).result
             self._env[op.id] = comb.add([xored, one])
         elif op.op == "or_reduce":
             # or_reduce(x) == x != 0
-            zero = hw.ConstantOp(IntegerAttr.get(_iN(w), 0)).result
+            zero = hw.ConstantOp(IntegerAttr.get(integer_type(w), 0)).result
             pred = IntegerAttr.get(IntegerType.get_signless(64), 1)  # ne
             self._env[op.id] = comb.ICmpOp(pred, src, zero).result
         elif op.op == "and_reduce":
             # and_reduce(x) == x == all_ones
-            allones = hw.ConstantOp(IntegerAttr.get(_iN(w), -1)).result
+            allones = hw.ConstantOp(IntegerAttr.get(integer_type(w), -1)).result
             pred = IntegerAttr.get(IntegerType.get_signless(64), 0)  # eq
             self._env[op.id] = comb.ICmpOp(pred, src, allones).result
         elif op.op == "xor_reduce":
@@ -284,9 +288,9 @@ class _ModuleEmitter:
         elif op.op == "reverse":
             self._env[op.id] = comb.reverse(src)
 
-    def _emit_binary(self, op: BinaryOp) -> None:
-        lhs = self._val(op.args[0])
-        rhs = self._val(op.args[1])
+    def emit_binary(self, op: BinaryOp) -> None:
+        lhs = self.get_value(op.args[0])
+        rhs = self.get_value(op.args[1])
 
         if op.op in COMPARE_OPS:
             _CMP_PRED = {
@@ -327,24 +331,24 @@ class _ModuleEmitter:
             raise CodegenError(f"No CIRCT mapping for binary op '{op.op}'")
         self._env[op.id] = fn()
 
-    def _emit_variadic(self, op: VariadicOp) -> None:
-        args = [self._val(a) for a in op.args]
+    def emit_variadic(self, op: VariadicOp) -> None:
+        args = [self.get_value(a) for a in op.args]
         self._env[op.id] = comb.concat(args)
 
-    def _emit_extract(self, op: ExtractOp) -> None:
-        src = self._val(op.args[0])
-        result_type = _iN(op.width)
+    def emit_extract(self, op: ExtractOp) -> None:
+        src = self.get_value(op.args[0])
+        result_type = integer_type(op.width)
         self._env[op.id] = comb.extract(result_type, src, low_bit=op.lowBit)
 
-    def _emit_mux(self, op: MuxOp) -> None:
-        sel = self._val(op.args[0])
-        true_val = self._val(op.args[1])
-        false_val = self._val(op.args[2])
+    def emit_mux(self, op: MuxOp) -> None:
+        sel = self.get_value(op.args[0])
+        true_val = self.get_value(op.args[1])
+        false_val = self.get_value(op.args[2])
         self._env[op.id] = comb.MuxOp(sel, true_val, false_val).result
 
-    def _emit_cast(self, op: CastOp) -> None:
-        src = self._val(op.args[0])
-        src_w = self._width(op.args[0])
+    def emit_cast(self, op: CastOp) -> None:
+        src = self.get_value(op.args[0])
+        src_w = self.value_width(op.args[0])
         target_w = op.width
         extend_bits = target_w - src_w
 
@@ -354,77 +358,86 @@ class _ModuleEmitter:
 
         if op.op == "sext":
             # Extract sign bit, replicate it, then concat
-            sign_bit = comb.extract(_iN(1), src, low_bit=src_w - 1)
-            extension = comb.replicate(_iN(extend_bits), sign_bit)
+            sign_bit = comb.extract(integer_type(1), src, low_bit=src_w - 1)
+            extension = comb.replicate(integer_type(extend_bits), sign_bit)
             self._env[op.id] = comb.concat([extension, src])
         elif op.op == "zext":
             # Prepend zeros
-            zero = hw.ConstantOp(IntegerAttr.get(_iN(extend_bits), 0)).result
+            zero = hw.ConstantOp(IntegerAttr.get(integer_type(extend_bits), 0)).result
             self._env[op.id] = comb.concat([zero, src])
 
-    def _emit_reg(self, op: RegOp) -> None:
-        data = self._val(op.args[0])
-        clk = self._clock_val(op.clock)
-        data_w = self._width(op.args[0])
+    def emit_register(self, op: RegOp) -> None:
+        data = self.get_value(op.args[0])
+        clk = self.get_clock_value(op.clock)
+        data_w = self.value_width(op.args[0])
 
         kwargs: dict = {"name": op.id}
 
         if op.reset:
-            kwargs["reset"] = self._val(op.reset)
+            kwargs["reset"] = self.get_value(op.reset)
             if isinstance(op.resetValue, str):
                 rv = int(op.resetValue, 0)
             else:
                 rv = op.resetValue
             kwargs["reset_value"] = hw.ConstantOp(
-                IntegerAttr.get(_iN(data_w), rv)
+                IntegerAttr.get(integer_type(data_w), rv)
             ).result
 
         if op.enable:
             self._env[op.id] = seq.compreg_ce(
-                data, clk, self._val(op.enable), **kwargs
+                data, clk, self.get_value(op.enable), **kwargs
             )
         else:
             self._env[op.id] = seq.compreg(data, clk, **kwargs)
 
-    def _emit_mem(self, op: MemOp) -> None:
-        element_type = _iN(op.width)
+    def emit_memory(self, op: MemOp) -> None:
+        element_type = integer_type(op.width)
         hlmem_type = Type.parse(f"!seq.hlmem<{op.depth}x{element_type}>")
 
-        clk = self._clock_val(op.clock)
+        clk = self.get_clock_value(op.clock)
         if op.reset:
-            rst = self._val(op.reset)
+            rst = self.get_value(op.reset)
         else:
-            rst = hw.ConstantOp(IntegerAttr.get(_iN(1), 0)).result
+            rst = hw.ConstantOp(IntegerAttr.get(integer_type(1), 0)).result
 
         mem_name = op.name or (op.id[0] if op.id else "mem")
         mem = seq.HLMemOp(
-            handle=hlmem_type, clk=clk, rst=rst, name=mem_name,
+            handle=hlmem_type,
+            clk=clk,
+            rst=rst,
+            name=mem_name,
         ).result
 
         # Create read ports (combinational, latency=0)
         for i, (addr_ref, enable_ref) in enumerate(op.reads):
-            addr = self._val(addr_ref)
-            enable = self._val(enable_ref)
+            addr = self.get_value(addr_ref)
+            enable = self.get_value(enable_ref)
             rdata = seq.ReadPortOp(
-                readData=element_type, memory=mem,
-                addresses=[addr], latency=0, rdEn=enable,
+                readData=element_type,
+                memory=mem,
+                addresses=[addr],
+                latency=0,
+                rdEn=enable,
             ).result
             self._env[op.id[i]] = rdata
 
         # Create write ports (synchronous, latency=1)
         for addr_ref, data_ref, enable_ref in op.writes:
-            addr = self._val(addr_ref)
-            data = self._val(data_ref)
-            enable = self._val(enable_ref)
+            addr = self.get_value(addr_ref)
+            data = self.get_value(data_ref)
+            enable = self.get_value(enable_ref)
             seq.WritePortOp(
-                memory=mem, addresses=[addr],
-                inData=data, wrEn=enable, latency=1,
+                memory=mem,
+                addresses=[addr],
+                inData=data,
+                wrEn=enable,
+                latency=1,
             )
 
-    def _emit_firmem(self, op: MemOp) -> None:
+    def emit_firmem(self, op: MemOp) -> None:
         mem_name = op.name or (op.id[0] if op.id else "mem")
         mem_type = Type.parse(f"!seq.firmem<{op.depth} x {op.width}>")
-        clk = self._clock_val(op.clock)
+        clk = self.get_clock_value(op.clock)
 
         try:
             collision_attr = IntegerAttr.get(IntegerType.get_signless(32), 0)
@@ -450,30 +463,30 @@ class _ModuleEmitter:
         for i, (addr_ref, enable_ref) in enumerate(op.reads):
             rdata = seq.FirMemReadOp(
                 mem,
-                self._val(addr_ref),
+                self.get_value(addr_ref),
                 clk,
-                enable=self._val(enable_ref),
-                results=[_iN(op.width)],
+                enable=self.get_value(enable_ref),
+                results=[integer_type(op.width)],
             ).result
             self._env[op.id[i]] = rdata
 
         for addr_ref, data_ref, enable_ref in op.writes:
             seq.FirMemWriteOp(
                 mem,
-                self._val(addr_ref),
+                self.get_value(addr_ref),
                 clk,
-                self._val(data_ref),
-                enable=self._val(enable_ref),
+                self.get_value(data_ref),
+                enable=self.get_value(enable_ref),
             )
 
-    def _emit_instance(self, op: InstanceOp) -> None:
-        inst_name = op.name or self._fresh_instance_name(op.module)
+    def emit_instance(self, op: InstanceOp) -> None:
+        inst_name = op.name or self.fresh_instance_name(op.module)
 
         # Collect input values in the order they appear in op.args
-        input_values = [self._val(ref) for ref in op.args.values()]
+        input_values = [self.get_value(ref) for ref in op.args.values()]
 
         # Build result types from widths of output ids
-        result_types = [_iN(self._width(id_)) for id_ in op.id]
+        result_types = [integer_type(self.value_width(id_)) for id_ in op.id]
 
         # Build name arrays
         arg_names = ArrayAttr.get([StringAttr.get(k) for k in op.args.keys()])
@@ -481,12 +494,9 @@ class _ModuleEmitter:
         # resultNames must match the child module's output port names
         child_mod = self._all_modules[op.module]
         child_out_names = [
-            name for name, pdef in child_mod.ports.items()
-            if pdef.dir == PortDir.OUTPUT
+            name for name, pdef in child_mod.ports.items() if pdef.dir == PortDir.OUTPUT
         ]
-        result_names = ArrayAttr.get(
-            [StringAttr.get(n) for n in child_out_names]
-        )
+        result_names = ArrayAttr.get([StringAttr.get(n) for n in child_out_names])
 
         inst = hw.InstanceOp(
             result_types,
@@ -502,7 +512,8 @@ class _ModuleEmitter:
         for i, id_ in enumerate(op.id):
             self._env[id_] = inst.results[i]
 
-def _resolve_top_modules(
+
+def resolve_top_modules(
     modules: List[Module],
     top: str,
 ) -> List[Module]:
@@ -514,21 +525,21 @@ def _resolve_top_modules(
     ordered: List[Module] = []
     visited: set[str] = set()
 
-    def _visit(name: str) -> None:
+    def visit_module(name: str) -> None:
         if name in visited:
             return
         visited.add(name)
         mod = by_name[name]
         for op in mod.body:
             if isinstance(op, InstanceOp):
-                _visit(op.module)
+                visit_module(op.module)
         ordered.append(mod)
 
-    _visit(top)
+    visit_module(top)
     return ordered
 
 
-def _build_mlir_module(
+def build_mlir_module(
     modules: List[Module],
     all_widths: Dict[str, Dict[str, ValueInfo]],
     ctx: Context,
@@ -548,7 +559,7 @@ def _build_mlir_module(
     return mlir_module
 
 
-def _collect_mem_initializers(
+def collect_memory_initializers(
     modules: List[Module],
 ) -> Dict[str, List[tuple[str, str, str]]]:
     """Return initialized memories as {module_name: [(name, file, task)]}."""
@@ -563,7 +574,7 @@ def _collect_mem_initializers(
     return result
 
 
-def _inject_mem_initializers(
+def inject_memory_initializers(
     verilog: str,
     initializers: Dict[str, List[tuple[str, str, str]]],
 ) -> str:
@@ -586,9 +597,9 @@ def _inject_mem_initializers(
             def insert_after_decl(decl_match: re.Match[str]) -> str:
                 indent = decl_match.group("indent")
                 initializer = (
-                    f'\n{indent}initial begin\n'
+                    f"\n{indent}initial begin\n"
                     f'{indent}  {task}("{escaped_file}", {mem_name});\n'
-                    f'{indent}end'
+                    f"{indent}end"
                 )
                 return decl_match.group(0) + initializer
 
@@ -598,8 +609,8 @@ def _inject_mem_initializers(
     verilog = module_re.sub(repl, verilog)
     return re.sub(
         r'(initial begin)\n\s*\n(\s*\$readmem[hb]\("[^"]+",\s*'
-        r'[A-Za-z_][A-Za-z0-9_$]*\);\n)\s*\n(\s*end)',
-        r'\1\n\2\3',
+        r"[A-Za-z_][A-Za-z0-9_$]*\);\n)\s*\n(\s*end)",
+        r"\1\n\2\3",
         verilog,
     )
 
@@ -618,11 +629,11 @@ def generate_mlir(
     are included.
     """
     if top is not None:
-        modules = _resolve_top_modules(modules, top)
+        modules = resolve_top_modules(modules, top)
 
     with Context() as ctx, Location.unknown():
         circt.register_dialects(ctx)
-        mlir_module = _build_mlir_module(modules, all_widths, ctx)
+        mlir_module = build_mlir_module(modules, all_widths, ctx)
 
         buf = io.StringIO()
         mlir_module.operation.print(file=buf, assume_verified=True)
@@ -648,12 +659,12 @@ def generate_verilog(
     from pycde.circt import passmanager
 
     if top is not None:
-        modules = _resolve_top_modules(modules, top)
-    mem_initializers = _collect_mem_initializers(modules)
+        modules = resolve_top_modules(modules, top)
+    mem_initializers = collect_memory_initializers(modules)
 
     with Context() as ctx, Location.unknown():
         circt.register_dialects(ctx)
-        mlir_module = _build_mlir_module(modules, all_widths, ctx)
+        mlir_module = build_mlir_module(modules, all_widths, ctx)
 
         pipeline = [
             "hw.module(lower-seq-hlmem)",
@@ -661,16 +672,16 @@ def generate_verilog(
             "lower-seq-to-sv",
         ]
         if optimize:
-            pipeline.extend([
-                "canonicalize",
-                "cse",
-                "hw.module(prettify-verilog)",
-                "hw.module(hw-cleanup)",
-            ])
+            pipeline.extend(
+                [
+                    "canonicalize",
+                    "cse",
+                    "hw.module(prettify-verilog)",
+                    "hw.module(hw-cleanup)",
+                ]
+            )
 
-        pm = passmanager.PassManager.parse(
-            "builtin.module(" + ",".join(pipeline) + ")"
-        )
+        pm = passmanager.PassManager.parse("builtin.module(" + ",".join(pipeline) + ")")
         try:
             pm.run(mlir_module.operation)
         except Exception as exc:
@@ -678,4 +689,4 @@ def generate_verilog(
 
         buf = io.StringIO()
         circt.export_verilog(mlir_module, buf)
-        return _inject_mem_initializers(buf.getvalue(), mem_initializers)
+        return inject_memory_initializers(buf.getvalue(), mem_initializers)

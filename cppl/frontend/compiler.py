@@ -46,12 +46,14 @@ class CompilerSession:
         module_report = report.module_reports[mod.name]
         if not report.success or module_report.module_dict is None:
             raise CompilationError(
-                module_report.error or report.design_error or "unknown compilation error"
+                module_report.error
+                or report.design_error
+                or "unknown compilation error"
             )
         return module_report.module_dict
 
 
-def _result_from_report(report: ModuleCompileReport) -> CompileResult:
+def result_from_report(report: ModuleCompileReport) -> CompileResult:
     return CompileResult(
         module_dict=report.module_dict,
         success=report.success,
@@ -72,7 +74,7 @@ def compile_module(
             [mod],
             max_retries=max_retries,
         )
-        return _result_from_report(report.module_reports[mod.name])
+        return result_from_report(report.module_reports[mod.name])
     except Exception as exc:
         return CompileResult(
             success=False,
@@ -106,11 +108,7 @@ def compile_modules(
             agent_config=agent_config,
         )
         return [
-            _result_from_report(compilation.module_reports[mod.name])
-            for mod in mods
+            result_from_report(compilation.module_reports[mod.name]) for mod in mods
         ]
     except Exception as exc:
-        return [
-            CompileResult(success=False, error=str(exc), attempts=0)
-            for _ in mods
-        ]
+        return [CompileResult(success=False, error=str(exc), attempts=0) for _ in mods]

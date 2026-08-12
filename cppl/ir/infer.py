@@ -43,13 +43,11 @@ def infer_widths(modules: List[Module]) -> Dict[str, Dict[str, ValueInfo]]:
     module_map: Dict[str, Module] = {m.name: m for m in modules}
     result: Dict[str, Dict[str, ValueInfo]] = {}
     for mod in modules:
-        result[mod.name] = _infer_module(mod, module_map)
+        result[mod.name] = infer_module(mod, module_map)
     return result
 
 
-def _infer_module(
-    mod: Module, module_map: Dict[str, Module]
-) -> Dict[str, ValueInfo]:
+def infer_module(mod: Module, module_map: Dict[str, Module]) -> Dict[str, ValueInfo]:
     ctx = f"Module '{mod.name}'"
     env: Dict[str, ValueInfo] = {}
 
@@ -80,7 +78,8 @@ def _infer_module(
             target = module_map.get(op.module)
             if target is not None:
                 target_outputs = [
-                    (name, pdef) for name, pdef in target.ports.items()
+                    (name, pdef)
+                    for name, pdef in target.ports.items()
                     if pdef.dir == PortDir.OUTPUT
                 ]
                 loc = f"{ctx} body[{i}]"
@@ -112,8 +111,8 @@ def _infer_module(
         progress = False
         for i, op in pending:
             loc = f"{ctx} body[{i}]"
-            if _can_infer(op, env):
-                _infer_op(op, env, loc, mod, module_map)
+            if can_infer(op, env):
+                infer_operation(op, env, loc, mod, module_map)
                 progress = True
             else:
                 still_pending.append((i, op))
@@ -122,13 +121,13 @@ def _infer_module(
             # a proper error message about the missing dependency.
             i, op = still_pending[0]
             loc = f"{ctx} body[{i}]"
-            _infer_op(op, env, loc, mod, module_map)
+            infer_operation(op, env, loc, mod, module_map)
         pending = still_pending
 
     return env
 
 
-def _can_infer(op: Operation, env: Dict[str, ValueInfo]) -> bool:
+def can_infer(op: Operation, env: Dict[str, ValueInfo]) -> bool:
     """Check whether all dependencies of *op* are already resolved in *env*."""
     if isinstance(op, ConstantOp):
         return True  # no dependencies
@@ -163,14 +162,14 @@ def _can_infer(op: Operation, env: Dict[str, ValueInfo]) -> bool:
         return all(arg in env for arg in op.args)
 
 
-def _width_of(name: str, env: Dict[str, ValueInfo], loc: str) -> int:
+def width_of(name: str, env: Dict[str, ValueInfo], loc: str) -> int:
     info = env.get(name)
     if info is None:
         raise WidthError(f"{loc}: unknown value '{name}' during width inference")
     return info.width
 
 
-def _infer_op(
+def infer_operation(
     op: Operation,
     env: Dict[str, ValueInfo],
     loc: str,
@@ -181,19 +180,18 @@ def _infer_op(
         env[op.id] = ValueInfo(width=op.width, source=f"{loc} constant")
 
     elif isinstance(op, UnaryOp):
-        w = _width_of(op.args[0], env, loc)
+        w = width_of(op.args[0], env, loc)
         if op.op in REDUCE_OPS:
             env[op.id] = ValueInfo(width=1, source=f"{loc} {op.op}")
         else:
             env[op.id] = ValueInfo(width=w, source=f"{loc} {op.op}")
 
     elif isinstance(op, BinaryOp):
-        w0 = _width_of(op.args[0], env, loc)
-        w1 = _width_of(op.args[1], env, loc)
+        w0 = width_of(op.args[0], env, loc)
+        w1 = width_of(op.args[1], env, loc)
         if w0 != w1:
             raise WidthError(
-                f"{loc}: operands of '{op.op}' have different widths "
-                f"({w0} vs {w1})"
+                f"{loc}: operands of '{op.op}' have different widths " f"({w0} vs {w1})"
             )
         if op.op in COMPARE_OPS:
             env[op.id] = ValueInfo(width=1, source=f"{loc} {op.op}")
@@ -201,13 +199,13 @@ def _infer_op(
             env[op.id] = ValueInfo(width=w0, source=f"{loc} {op.op}")
 
     elif isinstance(op, MuxOp):
-        sel_w = _width_of(op.args[0], env, loc)
+        sel_w = width_of(op.args[0], env, loc)
         if sel_w != 1:
             raise WidthError(
                 f"{loc}: mux selector '{op.args[0]}' must be 1-bit, got {sel_w}"
             )
-        w_true = _width_of(op.args[1], env, loc)
-        w_false = _width_of(op.args[2], env, loc)
+        w_true = width_of(op.args[1], env, loc)
+        w_false = width_of(op.args[2], env, loc)
         if w_true != w_false:
             raise WidthError(
                 f"{loc}: mux true/false operands have different widths "
@@ -216,7 +214,7 @@ def _infer_op(
         env[op.id] = ValueInfo(width=w_true, source=f"{loc} mux")
 
     elif isinstance(op, CastOp):
-        src_w = _width_of(op.args[0], env, loc)
+        src_w = width_of(op.args[0], env, loc)
         if op.width < src_w:
             raise WidthError(
                 f"{loc}: {op.op} target width {op.width} is less than "
@@ -227,11 +225,11 @@ def _infer_op(
     elif isinstance(op, VariadicOp):
         total = 0
         for arg in op.args:
-            total += _width_of(arg, env, loc)
+            total += width_of(arg, env, loc)
         env[op.id] = ValueInfo(width=total, source=f"{loc} concat")
 
     elif isinstance(op, ExtractOp):
-        src_w = _width_of(op.args[0], env, loc)
+        src_w = width_of(op.args[0], env, loc)
         if op.lowBit + op.width > src_w:
             raise WidthError(
                 f"{loc}: extract lowBit({op.lowBit}) + width({op.width}) = "
@@ -240,20 +238,20 @@ def _infer_op(
         env[op.id] = ValueInfo(width=op.width, source=f"{loc} extract")
 
     elif isinstance(op, RegOp):
-        data_w = _width_of(op.args[0], env, loc)
-        clk_w = _width_of(op.clock, env, loc)
+        data_w = width_of(op.args[0], env, loc)
+        clk_w = width_of(op.clock, env, loc)
         if clk_w != 1:
             raise WidthError(
                 f"{loc}: reg clock '{op.clock}' must be 1-bit, got {clk_w}"
             )
         if op.reset:
-            rst_w = _width_of(op.reset, env, loc)
+            rst_w = width_of(op.reset, env, loc)
             if rst_w != 1:
                 raise WidthError(
                     f"{loc}: reg reset '{op.reset}' must be 1-bit, got {rst_w}"
                 )
         if op.enable:
-            en_w = _width_of(op.enable, env, loc)
+            en_w = width_of(op.enable, env, loc)
             if en_w != 1:
                 raise WidthError(
                     f"{loc}: reg enable '{op.enable}' must be 1-bit, got {en_w}"
@@ -266,43 +264,43 @@ def _infer_op(
         env[op.id] = ValueInfo(width=data_w, source=f"{loc} reg")
 
     elif isinstance(op, MemOp):
-        clk_w = _width_of(op.clock, env, loc)
+        clk_w = width_of(op.clock, env, loc)
         if clk_w != 1:
             raise WidthError(
                 f"{loc}: mem clock '{op.clock}' must be 1-bit, got {clk_w}"
             )
         addr_width = max(1, math.ceil(math.log2(op.depth)))
         if op.reset:
-            rst_w = _width_of(op.reset, env, loc)
+            rst_w = width_of(op.reset, env, loc)
             if rst_w != 1:
                 raise WidthError(
                     f"{loc}: mem reset '{op.reset}' must be 1-bit, got {rst_w}"
                 )
         for i, (addr, enable) in enumerate(op.reads):
-            addr_w = _width_of(addr, env, loc)
+            addr_w = width_of(addr, env, loc)
             if addr_w != addr_width:
                 raise WidthError(
                     f"{loc}: mem reads[{i}].addr '{addr}' must be {addr_width}-bit "
                     f"for depth {op.depth}, got {addr_w}"
                 )
-            en_w = _width_of(enable, env, loc)
+            en_w = width_of(enable, env, loc)
             if en_w != 1:
                 raise WidthError(
                     f"{loc}: mem reads[{i}].enable '{enable}' must be 1-bit, got {en_w}"
                 )
         for i, (addr, data, enable) in enumerate(op.writes):
-            addr_w = _width_of(addr, env, loc)
+            addr_w = width_of(addr, env, loc)
             if addr_w != addr_width:
                 raise WidthError(
                     f"{loc}: mem writes[{i}].addr '{addr}' must be {addr_width}-bit "
                     f"for depth {op.depth}, got {addr_w}"
                 )
-            en_w = _width_of(enable, env, loc)
+            en_w = width_of(enable, env, loc)
             if en_w != 1:
                 raise WidthError(
                     f"{loc}: mem writes[{i}].enable '{enable}' must be 1-bit, got {en_w}"
                 )
-            data_w = _width_of(data, env, loc)
+            data_w = width_of(data, env, loc)
             if data_w != op.width:
                 raise WidthError(
                     f"{loc}: mem writes[{i}].data '{data}' has width {data_w} "
@@ -321,7 +319,7 @@ def _infer_op(
 
         # Check input widths match target ports
         for port_name, ref in op.args.items():
-            ref_w = _width_of(ref, env, loc)
+            ref_w = width_of(ref, env, loc)
             target_port = target.ports.get(port_name)
             if target_port is None:
                 continue  # validator catches this
@@ -339,7 +337,8 @@ def _infer_op(
 
         # Register output widths
         target_outputs = [
-            (name, pdef) for name, pdef in target.ports.items()
+            (name, pdef)
+            for name, pdef in target.ports.items()
             if pdef.dir == PortDir.OUTPUT
         ]
         for id_name, (port_name, pdef) in zip(op.id, target_outputs):
@@ -350,7 +349,7 @@ def _infer_op(
 
     elif isinstance(op, OutputOp):
         for port_name, ref in op.args.items():
-            ref_w = _width_of(ref, env, loc)
+            ref_w = width_of(ref, env, loc)
             port_def = mod.ports.get(port_name)
             if port_def is None:
                 continue  # validator catches this

@@ -30,7 +30,7 @@ from ..ir.parser import parse_design
 from ..ir.validator import validate_design
 
 
-def _extract_json_array(text: str) -> list:
+def extract_json_array(text: str) -> list:
     text = text.strip()
     fenced = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
     if fenced:
@@ -47,7 +47,7 @@ def _extract_json_array(text: str) -> list:
     return value
 
 
-def _ports_dict(mod: ModuleDef) -> dict:
+def build_ports_dict(mod: ModuleDef) -> dict:
     ports: dict = {}
     for port in mod.ports:
         entry = {"dir": port.direction, "width": port.width}
@@ -57,7 +57,7 @@ def _ports_dict(mod: ModuleDef) -> dict:
     return ports
 
 
-def _instance_ops(instances: list[InstanceCall]) -> list:
+def build_instance_ops(instances: list[InstanceCall]) -> list:
     operations = []
     for inst in instances:
         operation = {
@@ -72,7 +72,9 @@ def _instance_ops(instances: list[InstanceCall]) -> list:
     return operations
 
 
-def _split_instances(mod: ModuleDef) -> tuple[list[InstanceCall], list[InstanceCall]]:
+def split_instances_by_placement(
+    mod: ModuleDef,
+) -> tuple[list[InstanceCall], list[InstanceCall]]:
     known = {port.name for port in mod.ports if port.direction == "input"}
     preplaced: list[InstanceCall] = []
     deferred: list[InstanceCall] = []
@@ -85,7 +87,7 @@ def _split_instances(mod: ModuleDef) -> tuple[list[InstanceCall], list[InstanceC
     return preplaced, deferred
 
 
-def _has_instance_op(body: list, inst: InstanceCall) -> bool:
+def contains_instance_op(body: list, inst: InstanceCall) -> bool:
     return any(
         isinstance(operation, dict)
         and operation.get("op") == "instance"
@@ -97,7 +99,7 @@ def _has_instance_op(body: list, inst: InstanceCall) -> bool:
     )
 
 
-def _make_stub_dicts(instances: list[InstanceCall]) -> list[dict]:
+def build_stub_modules(instances: list[InstanceCall]) -> list[dict]:
     stubs: dict[str, dict] = {}
     for inst in instances:
         if inst.target_name in stubs:
@@ -112,12 +114,14 @@ def _make_stub_dicts(instances: list[InstanceCall]) -> list[dict]:
             ports[port.name] = entry
             if port.direction == "output":
                 constant_id = f"_stub_{port.name}"
-                body.append({
-                    "id": constant_id,
-                    "op": "constant",
-                    "value": 0,
-                    "width": port.width,
-                })
+                body.append(
+                    {
+                        "id": constant_id,
+                        "op": "constant",
+                        "value": 0,
+                        "width": port.width,
+                    }
+                )
                 output_args[port.name] = constant_id
         body.append({"op": "output", "args": output_args})
         stubs[inst.target_name] = {
@@ -128,10 +132,12 @@ def _make_stub_dicts(instances: list[InstanceCall]) -> list[dict]:
     return list(stubs.values())
 
 
-def _diagnostic(exc: Exception) -> DiagnosticPacket:
+def diagnostic_from_exception(exc: Exception) -> DiagnosticPacket:
     message = str(exc)
     location_match = re.search(r"(Module '[^']+'(?: body\[\d+\])?)", message)
-    identifiers = tuple(dict.fromkeys(re.findall(r"'([A-Za-z_][A-Za-z0-9_$]*)'", message)))
+    identifiers = tuple(
+        dict.fromkeys(re.findall(r"'([A-Za-z_][A-Za-z0-9_$]*)'", message))
+    )
     return DiagnosticPacket(
         category=type(exc).__name__,
         message=message[:1200],
@@ -159,12 +165,12 @@ class ModuleWorker:
         self.dependency_modules = list(dependency_modules or [])
         self.missing_pattern_dependencies = missing_pattern_dependencies
         self._patterns_checked = 0
-        self.ports = _ports_dict(mod)
-        self.preplaced, self.deferred = _split_instances(mod)
-        self.preplaced_ops = _instance_ops(self.preplaced)
-        self.stub_dicts = _make_stub_dicts(mod.instances)
+        self.ports = build_ports_dict(mod)
+        self.preplaced, self.deferred = split_instances_by_placement(mod)
+        self.preplaced_ops = build_instance_ops(self.preplaced)
+        self.stub_dicts = build_stub_modules(mod.instances)
 
-    def _validate(self, module_dict: dict) -> None:
+    def validate_candidate(self, module_dict: dict) -> None:
         real_names = {module["name"] for module in self.dependency_modules}
         stubs = [stub for stub in self.stub_dicts if stub["name"] not in real_names]
         design = stubs + self.dependency_modules + [module_dict]
@@ -178,10 +184,9 @@ class ModuleWorker:
             widths=widths,
         )
 
-    def _materialize(self, llm_body: list) -> dict:
+    def materialize_candidate(self, llm_body: list) -> dict:
         missing = [
-            inst for inst in self.deferred
-            if not _has_instance_op(llm_body, inst)
+            inst for inst in self.deferred if not contains_instance_op(llm_body, inst)
         ]
         if missing:
             names = ", ".join(inst.target_name for inst in missing)
@@ -196,10 +201,10 @@ class ModuleWorker:
             "ports": self.ports,
             "body": full_body,
         }
-        self._validate(module_dict)
+        self.validate_candidate(module_dict)
         return module_dict
 
-    def _compress_requirements(self, report: ModuleCompileReport) -> str:
+    def compress_requirements(self, report: ModuleCompileReport) -> str:
         compressed: list[tuple[str, list[str]]] = []
         for source, text in requirement_chunks(self.mod.docstring, self.config):
             context = build_requirement_compression_context(
@@ -230,7 +235,10 @@ class ModuleWorker:
             if (
                 not isinstance(requirements, list)
                 or not requirements
-                or any(not isinstance(item, str) or not item.strip() for item in requirements)
+                or any(
+                    not isinstance(item, str) or not item.strip()
+                    for item in requirements
+                )
             ):
                 raise ContextBudgetError(
                     f"Requirement compression for {source} returned no usable requirements."
@@ -267,7 +275,7 @@ class ModuleWorker:
 
         cache_key = self.cache.key_for(self.mod, self.dependency_modules)
         report.cache_key = cache_key
-        cached = self.cache.load(cache_key, self._validate)
+        cached = self.cache.load(cache_key, self.validate_candidate)
         if cached is not None:
             report.status = "success"
             report.cache_hit = True
@@ -296,7 +304,7 @@ class ModuleWorker:
                     if description_override is not None:
                         raise
                     report.status = "compressing"
-                    description_override = self._compress_requirements(report)
+                    description_override = self.compress_requirements(report)
                     context = build_agent_context(
                         self.mod,
                         self.preplaced,
@@ -317,10 +325,10 @@ class ModuleWorker:
                 report.output_tokens_estimate += estimate_tokens(response.text)
                 report.status = "validating"
                 try:
-                    candidate = _extract_json_array(response.text)
-                    module_dict = self._materialize(candidate)
+                    candidate = extract_json_array(response.text)
+                    module_dict = self.materialize_candidate(candidate)
                 except (json.JSONDecodeError, ValueError, CircuitPPLError) as exc:
-                    diagnostic = _diagnostic(exc)
+                    diagnostic = diagnostic_from_exception(exc)
                     if candidate is None:
                         candidate = []
                     if attempt >= self.max_retries:
@@ -330,7 +338,9 @@ class ModuleWorker:
                 report.status = "success"
                 report.module_dict = module_dict
                 report.patterns_checked = self._patterns_checked
-                report.compression_events = list(dict.fromkeys(report.compression_events))
+                report.compression_events = list(
+                    dict.fromkeys(report.compression_events)
+                )
                 report.duration_seconds = time.monotonic() - started
                 return report
         except Exception as exc:

@@ -53,11 +53,11 @@ def parse_design(raw: Union[str, Any]) -> List[Module]:
     for i, mod_raw in enumerate(data):
         if not isinstance(mod_raw, dict):
             raise ParseError(f"Module at index {i} must be a JSON object")
-        modules.append(_parse_module(mod_raw, i))
+        modules.append(parse_module(mod_raw, i))
     return modules
 
 
-def _parse_module(raw: Dict[str, Any], index: int) -> Module:
+def parse_module(raw: Dict[str, Any], index: int) -> Module:
     ctx = f"module[{index}]"
 
     name = raw.get("name")
@@ -98,12 +98,12 @@ def _parse_module(raw: Dict[str, Any], index: int) -> Module:
     for j, op_raw in enumerate(body_raw):
         if isinstance(op_raw, dict) and "_comment" in op_raw and "op" not in op_raw:
             continue  # skip comment-only entries
-        body.append(_parse_operation(op_raw, ctx, j))
+        body.append(parse_operation(op_raw, ctx, j))
 
     return Module(name=name, ports=ports, body=body)
 
 
-def _parse_operation(raw: Dict[str, Any], ctx: str, index: int) -> Operation:
+def parse_operation(raw: Dict[str, Any], ctx: str, index: int) -> Operation:
     if not isinstance(raw, dict):
         raise ParseError(f"{ctx} body[{index}]: operation must be an object")
 
@@ -114,39 +114,41 @@ def _parse_operation(raw: Dict[str, Any], ctx: str, index: int) -> Operation:
     loc = f"{ctx} body[{index}] (op='{op}')"
 
     if op == "constant":
-        return _parse_constant(raw, loc)
+        return parse_constant_operation(raw, loc)
     elif op == "mux":
-        return _parse_mux(raw, loc)
+        return parse_mux_operation(raw, loc)
     elif op in UNARY_OPS or op in REDUCE_OPS:
-        return _parse_unary(raw, loc, op)
+        return parse_unary_operation(raw, loc, op)
     elif op in BINARY_OPS or op in COMPARE_OPS:
-        return _parse_binary(raw, loc, op)
+        return parse_binary_operation(raw, loc, op)
     elif op in VARIADIC_OPS:
-        return _parse_variadic(raw, loc, op)
+        return parse_variadic_operation(raw, loc, op)
     elif op == "extract":
-        return _parse_extract(raw, loc)
+        return parse_extract_operation(raw, loc)
     elif op in CAST_OPS:
-        return _parse_cast(raw, loc, op)
+        return parse_cast_operation(raw, loc, op)
     elif op == "reg":
-        return _parse_reg(raw, loc)
+        return parse_register_operation(raw, loc)
     elif op == "mem":
-        return _parse_mem(raw, loc)
+        return parse_memory_operation(raw, loc)
     elif op == "instance":
-        return _parse_instance(raw, loc)
+        return parse_instance_operation(raw, loc)
     elif op == "output":
-        return _parse_output(raw, loc)
+        return parse_output_operation(raw, loc)
     else:
         raise ParseError(f"{loc}: unknown op '{op}'")
 
 
-def _require_id(raw: Dict[str, Any], loc: str) -> str:
+def require_id(raw: Dict[str, Any], loc: str) -> str:
     id_ = raw.get("id")
     if not isinstance(id_, str) or not id_:
         raise ParseError(f"{loc}: 'id' must be a non-empty string")
     return id_
 
 
-def _require_str_list(raw: Dict[str, Any], key: str, loc: str, *, exact: int = None) -> List[str]:
+def require_str_list(
+    raw: Dict[str, Any], key: str, loc: str, *, exact: int = None
+) -> List[str]:
     val = raw.get(key)
     if not isinstance(val, list):
         raise ParseError(f"{loc}: '{key}' must be an array")
@@ -154,11 +156,13 @@ def _require_str_list(raw: Dict[str, Any], key: str, loc: str, *, exact: int = N
         if not isinstance(v, str):
             raise ParseError(f"{loc}: '{key}[{i}]' must be a string")
     if exact is not None and len(val) != exact:
-        raise ParseError(f"{loc}: '{key}' must have exactly {exact} element(s), got {len(val)}")
+        raise ParseError(
+            f"{loc}: '{key}' must have exactly {exact} element(s), got {len(val)}"
+        )
     return val
 
 
-def _require_str_dict(raw: Dict[str, Any], key: str, loc: str) -> Dict[str, str]:
+def require_str_dict(raw: Dict[str, Any], key: str, loc: str) -> Dict[str, str]:
     val = raw.get(key)
     if not isinstance(val, dict):
         raise ParseError(f"{loc}: '{key}' must be an object")
@@ -168,7 +172,7 @@ def _require_str_dict(raw: Dict[str, Any], key: str, loc: str) -> Dict[str, str]
     return val
 
 
-def _require_integer_literal(value: Any, field: str, loc: str) -> None:
+def require_integer_literal(value: Any, field: str, loc: str) -> None:
     """Ensure a value can be lowered by codegen as an integer literal."""
     if isinstance(value, bool) or not isinstance(value, (int, str)):
         raise ParseError(f"{loc}: '{field}' must be an integer or integer string")
@@ -181,39 +185,39 @@ def _require_integer_literal(value: Any, field: str, loc: str) -> None:
             ) from exc
 
 
-def _parse_constant(raw: Dict[str, Any], loc: str) -> ConstantOp:
-    id_ = _require_id(raw, loc)
+def parse_constant_operation(raw: Dict[str, Any], loc: str) -> ConstantOp:
+    id_ = require_id(raw, loc)
     value = raw.get("value")
-    _require_integer_literal(value, "value", loc)
+    require_integer_literal(value, "value", loc)
     width = raw.get("width")
     if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
         raise ParseError(f"{loc}: 'width' must be a positive integer")
     return ConstantOp(id=id_, op="constant", value=value, width=width)
 
 
-def _parse_unary(raw: Dict[str, Any], loc: str, op: str) -> UnaryOp:
-    id_ = _require_id(raw, loc)
-    args = _require_str_list(raw, "args", loc, exact=1)
+def parse_unary_operation(raw: Dict[str, Any], loc: str, op: str) -> UnaryOp:
+    id_ = require_id(raw, loc)
+    args = require_str_list(raw, "args", loc, exact=1)
     return UnaryOp(id=id_, op=op, args=args)
 
 
-def _parse_binary(raw: Dict[str, Any], loc: str, op: str) -> BinaryOp:
-    id_ = _require_id(raw, loc)
-    args = _require_str_list(raw, "args", loc, exact=2)
+def parse_binary_operation(raw: Dict[str, Any], loc: str, op: str) -> BinaryOp:
+    id_ = require_id(raw, loc)
+    args = require_str_list(raw, "args", loc, exact=2)
     return BinaryOp(id=id_, op=op, args=args)
 
 
-def _parse_variadic(raw: Dict[str, Any], loc: str, op: str) -> VariadicOp:
-    id_ = _require_id(raw, loc)
-    args = _require_str_list(raw, "args", loc)
+def parse_variadic_operation(raw: Dict[str, Any], loc: str, op: str) -> VariadicOp:
+    id_ = require_id(raw, loc)
+    args = require_str_list(raw, "args", loc)
     if len(args) < 1:
         raise ParseError(f"{loc}: 'args' must have at least 1 element")
     return VariadicOp(id=id_, op=op, args=args)
 
 
-def _parse_extract(raw: Dict[str, Any], loc: str) -> ExtractOp:
-    id_ = _require_id(raw, loc)
-    args = _require_str_list(raw, "args", loc, exact=1)
+def parse_extract_operation(raw: Dict[str, Any], loc: str) -> ExtractOp:
+    id_ = require_id(raw, loc)
+    args = require_str_list(raw, "args", loc, exact=1)
     low = raw.get("lowBit")
     if isinstance(low, bool) or not isinstance(low, int) or low < 0:
         raise ParseError(f"{loc}: 'lowBit' must be a non-negative integer")
@@ -223,24 +227,24 @@ def _parse_extract(raw: Dict[str, Any], loc: str) -> ExtractOp:
     return ExtractOp(id=id_, op="extract", args=args, lowBit=low, width=width)
 
 
-def _parse_mux(raw: Dict[str, Any], loc: str) -> MuxOp:
-    id_ = _require_id(raw, loc)
-    args = _require_str_list(raw, "args", loc, exact=3)
+def parse_mux_operation(raw: Dict[str, Any], loc: str) -> MuxOp:
+    id_ = require_id(raw, loc)
+    args = require_str_list(raw, "args", loc, exact=3)
     return MuxOp(id=id_, op="mux", args=args)
 
 
-def _parse_cast(raw: Dict[str, Any], loc: str, op: str) -> CastOp:
-    id_ = _require_id(raw, loc)
-    args = _require_str_list(raw, "args", loc, exact=1)
+def parse_cast_operation(raw: Dict[str, Any], loc: str, op: str) -> CastOp:
+    id_ = require_id(raw, loc)
+    args = require_str_list(raw, "args", loc, exact=1)
     width = raw.get("width")
     if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
         raise ParseError(f"{loc}: 'width' must be a positive integer")
     return CastOp(id=id_, op=op, args=args, width=width)
 
 
-def _parse_reg(raw: Dict[str, Any], loc: str) -> RegOp:
-    id_ = _require_id(raw, loc)
-    args = _require_str_list(raw, "args", loc, exact=1)
+def parse_register_operation(raw: Dict[str, Any], loc: str) -> RegOp:
+    id_ = require_id(raw, loc)
+    args = require_str_list(raw, "args", loc, exact=1)
 
     clock = raw.get("clock")
     if not isinstance(clock, str) or not clock:
@@ -254,8 +258,10 @@ def _parse_reg(raw: Dict[str, Any], loc: str) -> RegOp:
         if not isinstance(reset, str):
             raise ParseError(f"{loc}: 'reset' must be a string")
         if "resetValue" not in raw:
-            raise ParseError(f"{loc}: 'resetValue' is required when 'reset' is provided")
-        _require_integer_literal(reset_value, "resetValue", loc)
+            raise ParseError(
+                f"{loc}: 'resetValue' is required when 'reset' is provided"
+            )
+        require_integer_literal(reset_value, "resetValue", loc)
     else:
         if "reset" in raw and not isinstance(reset, str):
             raise ParseError(f"{loc}: 'reset' must be a string")
@@ -268,13 +274,18 @@ def _parse_reg(raw: Dict[str, Any], loc: str) -> RegOp:
         raise ParseError(f"{loc}: 'width' must be a non-negative integer")
 
     return RegOp(
-        id=id_, op="reg", args=args, clock=clock,
-        reset=reset, resetValue=reset_value, enable=enable,
+        id=id_,
+        op="reg",
+        args=args,
+        clock=clock,
+        reset=reset,
+        resetValue=reset_value,
+        enable=enable,
         width=reg_width,
     )
 
 
-def _parse_mem(raw: Dict[str, Any], loc: str) -> MemOp:
+def parse_memory_operation(raw: Dict[str, Any], loc: str) -> MemOp:
     id_ = raw.get("id")
     if not isinstance(id_, list):
         raise ParseError(f"{loc}: 'id' must be an array of strings")
@@ -350,14 +361,21 @@ def _parse_mem(raw: Dict[str, Any], loc: str) -> MemOp:
         raise ParseError(f"{loc}: 'initFormat' must be 'hex' or 'bin'")
 
     return MemOp(
-        id=id_, op="mem", width=width, depth=depth,
-        clock=clock, reset=reset,
-        reads=tuple(reads), writes=tuple(writes),
-        name=name, initFile=init_file, initFormat=init_format,
+        id=id_,
+        op="mem",
+        width=width,
+        depth=depth,
+        clock=clock,
+        reset=reset,
+        reads=tuple(reads),
+        writes=tuple(writes),
+        name=name,
+        initFile=init_file,
+        initFormat=init_format,
     )
 
 
-def _parse_instance(raw: Dict[str, Any], loc: str) -> InstanceOp:
+def parse_instance_operation(raw: Dict[str, Any], loc: str) -> InstanceOp:
     id_ = raw.get("id")
     if not isinstance(id_, list):
         raise ParseError(f"{loc}: 'id' must be an array of strings")
@@ -367,13 +385,13 @@ def _parse_instance(raw: Dict[str, Any], loc: str) -> InstanceOp:
     module = raw.get("module")
     if not isinstance(module, str) or not module:
         raise ParseError(f"{loc}: 'module' must be a non-empty string")
-    args = _require_str_dict(raw, "args", loc)
+    args = require_str_dict(raw, "args", loc)
     name = raw.get("name", "")
     if not isinstance(name, str):
         raise ParseError(f"{loc}: 'name' must be a string")
     return InstanceOp(id=id_, op="instance", module=module, args=args, name=name)
 
 
-def _parse_output(raw: Dict[str, Any], loc: str) -> OutputOp:
-    args = _require_str_dict(raw, "args", loc)
+def parse_output_operation(raw: Dict[str, Any], loc: str) -> OutputOp:
+    args = require_str_dict(raw, "args", loc)
     return OutputOp(op="output", args=args)

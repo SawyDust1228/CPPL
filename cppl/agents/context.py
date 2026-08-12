@@ -51,7 +51,7 @@ def estimate_tokens(text: str) -> int:
     return max(1, (ascii_chars + 1) // 4 + non_ascii_chars)
 
 
-def _compact_description(description: str) -> tuple[str, list[str]]:
+def compact_description(description: str) -> tuple[str, list[str]]:
     events: list[str] = []
     paragraphs = re.split(r"\n\s*\n", description.strip())
     compacted: list[str] = []
@@ -77,7 +77,7 @@ def _compact_description(description: str) -> tuple[str, list[str]]:
     return result, events
 
 
-def _requirement_chunks(description: str, max_chars: int = 1600) -> list[str]:
+def split_requirement_chunks(description: str, max_chars: int = 1600) -> list[str]:
     paragraphs = re.split(r"\n\s*\n", description)
     chunks: list[str] = []
     current = ""
@@ -85,7 +85,7 @@ def _requirement_chunks(description: str, max_chars: int = 1600) -> list[str]:
         pieces = [paragraph]
         if len(paragraph) > max_chars:
             pieces = [
-                paragraph[index:index + max_chars]
+                paragraph[index : index + max_chars]
                 for index in range(0, len(paragraph), max_chars)
             ]
         for piece in pieces:
@@ -106,11 +106,8 @@ def requirement_chunks(
 ) -> list[tuple[str, str]]:
     """Split long requirements into independently budgeted source chunks."""
     available_chars = max(400, (config.input_budget_tokens - 300) * 3)
-    chunks = _requirement_chunks(description, max_chars=min(4000, available_chars))
-    return [
-        (f"R{index:03d}", chunk)
-        for index, chunk in enumerate(chunks, start=1)
-    ]
+    chunks = split_requirement_chunks(description, max_chars=min(4000, available_chars))
+    return [(f"R{index:03d}", chunk) for index, chunk in enumerate(chunks, start=1)]
 
 
 def build_requirement_compression_context(
@@ -137,7 +134,7 @@ def build_requirement_compression_context(
     )
 
 
-def _port_contract(mod: ModuleDef) -> list[dict]:
+def build_port_contract(mod: ModuleDef) -> list[dict]:
     return [
         {
             "name": port.name,
@@ -149,7 +146,7 @@ def _port_contract(mod: ModuleDef) -> list[dict]:
     ]
 
 
-def _instance_contract(inst: InstanceCall, placement: str) -> dict:
+def build_instance_contract(inst: InstanceCall, placement: str) -> dict:
     return {
         "placement": placement,
         "module": inst.target_name,
@@ -170,7 +167,7 @@ def _instance_contract(inst: InstanceCall, placement: str) -> dict:
     }
 
 
-def _base_payload(
+def build_base_payload(
     mod: ModuleDef,
     preplaced_instances: Iterable[InstanceCall],
     deferred_instances: Iterable[InstanceCall],
@@ -179,12 +176,18 @@ def _base_payload(
     return {
         "task": "generate_module_body",
         "module": mod.name,
-        "ports": _port_contract(mod),
+        "ports": build_port_contract(mod),
         "requirements": description,
         "patterns": [pattern_as_dict(pattern) for pattern in mod.patterns],
         "instances": [
-            *(_instance_contract(inst, "already_preplaced") for inst in preplaced_instances),
-            *(_instance_contract(inst, "must_emit") for inst in deferred_instances),
+            *(
+                build_instance_contract(inst, "already_preplaced")
+                for inst in preplaced_instances
+            ),
+            *(
+                build_instance_contract(inst, "must_emit")
+                for inst in deferred_instances
+            ),
         ],
         "rules": [
             "Do not emit already_preplaced instance operations.",
@@ -208,10 +211,10 @@ def build_agent_context(
     diagnostic: DiagnosticPacket | None = None,
     description_override: str | None = None,
 ) -> AgentContext:
-    description, events = _compact_description(
+    description, events = compact_description(
         description_override if description_override is not None else mod.docstring
     )
-    payload = _base_payload(
+    payload = build_base_payload(
         mod,
         preplaced_instances,
         deferred_instances,

@@ -229,22 +229,21 @@ Body:
 """
 
 
-def _append_instance_details(lines: list[str], instances: list[InstanceCall]) -> None:
+def append_instance_details(lines: list[str], instances: list[InstanceCall]) -> None:
     for inst in instances:
         arg_str = ", ".join(f"{k}={v}" for k, v in inst.input_map.items())
         name = f" named '{inst.name}'" if inst.name else ""
-        lines.append(f"  Instance{name} of '{inst.target_name}': "
-                     f"{inst.target_name}({arg_str})")
+        lines.append(
+            f"  Instance{name} of '{inst.target_name}': "
+            f"{inst.target_name}({arg_str})"
+        )
         if inst.name:
-            lines.append(f"    - instance op must include \"name\": \"{inst.name}\"")
+            lines.append(f'    - instance op must include "name": "{inst.name}"')
 
-        output_ports = [
-            p for p in inst.target_ports if p.direction == "output"
-        ]
+        output_ports = [p for p in inst.target_ports if p.direction == "output"]
         for port, oid in zip(output_ports, inst.output_ids):
             lines.append(
-                f"    - {oid} (width {port.width}): "
-                f"output port '{port.name}'"
+                f"    - {oid} (width {port.width}): " f"output port '{port.name}'"
             )
 
 
@@ -274,12 +273,11 @@ def build_user_prompt(
             "Pre-defined instance operations "
             "(already included — do NOT generate these):"
         )
-        _append_instance_details(lines, preplaced_instances)
+        append_instance_details(lines, preplaced_instances)
 
         lines.append("")
         lines.append(
-            "You may reference the instance output values listed above "
-            "as value IDs."
+            "You may reference the instance output values listed above " "as value IDs."
         )
         lines.append(
             "Generate ONLY the remaining logic and the final output operation."
@@ -289,7 +287,7 @@ def build_user_prompt(
     if deferred_instances:
         lines.append("")
         lines.append("Required instance operations to include in your body:")
-        _append_instance_details(lines, deferred_instances)
+        append_instance_details(lines, deferred_instances)
         lines.append("")
         lines.append(
             "Generate each required instance operation exactly once, after all "

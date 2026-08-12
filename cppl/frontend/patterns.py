@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Mapping, Union
 
 
-def _freeze_values(values: Mapping[str, int], field_name: str) -> Mapping[str, int]:
+def freeze_values(values: Mapping[str, int], field_name: str) -> Mapping[str, int]:
     if not isinstance(values, Mapping):
         raise TypeError(f"{field_name} must be a mapping of port names to integers")
     result: dict[str, int] = {}
@@ -21,7 +21,7 @@ def _freeze_values(values: Mapping[str, int], field_name: str) -> Mapping[str, i
     return MappingProxyType(result)
 
 
-def _validate_name(name: str | None) -> None:
+def validate_pattern_name(name: str | None) -> None:
     if name is not None and (not isinstance(name, str) or not name.strip()):
         raise TypeError("Pattern name must be a non-empty string or None")
 
@@ -34,8 +34,8 @@ class Step:
     outputs: Mapping[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "inputs", _freeze_values(self.inputs, "Step.inputs"))
-        object.__setattr__(self, "outputs", _freeze_values(self.outputs, "Step.outputs"))
+        object.__setattr__(self, "inputs", freeze_values(self.inputs, "Step.inputs"))
+        object.__setattr__(self, "outputs", freeze_values(self.outputs, "Step.outputs"))
 
 
 @dataclass(frozen=True)
@@ -47,9 +47,9 @@ class Case:
     name: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_name(self.name)
-        object.__setattr__(self, "inputs", _freeze_values(self.inputs, "Case.inputs"))
-        object.__setattr__(self, "outputs", _freeze_values(self.outputs, "Case.outputs"))
+        validate_pattern_name(self.name)
+        object.__setattr__(self, "inputs", freeze_values(self.inputs, "Case.inputs"))
+        object.__setattr__(self, "outputs", freeze_values(self.outputs, "Case.outputs"))
 
 
 @dataclass(frozen=True)
@@ -60,8 +60,10 @@ class Sequence:
     name: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_name(self.name)
-        if isinstance(self.steps, (str, bytes)) or not isinstance(self.steps, SequenceABC):
+        validate_pattern_name(self.name)
+        if isinstance(self.steps, (str, bytes)) or not isinstance(
+            self.steps, SequenceABC
+        ):
             raise TypeError("Sequence steps must be a sequence of Step objects")
         steps = tuple(self.steps)
         if any(not isinstance(step, Step) for step in steps):
@@ -72,7 +74,9 @@ class Sequence:
 Pattern = Union[Case, Sequence]
 
 
-def normalize_patterns(patterns: object, ports: SequenceABC[object]) -> tuple[Pattern, ...]:
+def normalize_patterns(
+    patterns: object, ports: SequenceABC[object]
+) -> tuple[Pattern, ...]:
     """Validate patterns against module ports and return immutable values."""
     if patterns is None:
         return ()

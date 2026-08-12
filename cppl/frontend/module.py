@@ -16,6 +16,7 @@ from .patterns import Pattern, normalize_patterns
 @dataclass
 class PortInfo:
     """Describes a single port extracted from a function signature."""
+
     name: str
     width: int
     direction: str  # "input" | "output"
@@ -25,11 +26,12 @@ class PortInfo:
 @dataclass
 class InstanceCall:
     """Records one module-instantiation captured during @module body tracing."""
+
     name: Optional[str]
     target_name: str
     target_ports: List[PortInfo]
-    input_map: Dict[str, str]   # child_input_port → parent_value_id
-    output_ids: List[str]       # parent value IDs for child outputs
+    input_map: Dict[str, str]  # child_input_port → parent_value_id
+    output_ids: List[str]  # parent value IDs for child outputs
     target_mod: "ModuleDef | None" = None  # reference to target ModuleDef
 
 
@@ -86,7 +88,7 @@ class _MultiInstanceOutputProxy:
 _capture_ctx = threading.local()
 
 
-def _get_value_name(arg: object) -> str:
+def get_value_name(arg: object) -> str:
     """Extract the value-ID string from a proxy object or raise."""
     if isinstance(arg, (_PortProxy, _InstanceOutputProxy)):
         return arg._name
@@ -101,6 +103,7 @@ def _get_value_name(arg: object) -> str:
 @dataclass
 class ModuleDef:
     """All metadata captured from a @module-decorated function."""
+
     name: str
     ports: List[PortInfo]
     docstring: str
@@ -134,7 +137,7 @@ class ModuleDef:
                     f"but {len(args)} positional arguments were given."
                 )
             port_name = input_ports[i].name
-            input_map[port_name] = _get_value_name(arg)
+            input_map[port_name] = get_value_name(arg)
 
         input_port_names = {p.name for p in input_ports}
         for kw, arg in kwargs.items():
@@ -148,7 +151,7 @@ class ModuleDef:
                     f"Input port '{kw}' of module '{self.name}' specified "
                     f"both positionally and as keyword argument."
                 )
-            input_map[kw] = _get_value_name(arg)
+            input_map[kw] = get_value_name(arg)
 
         missing = [p.name for p in input_ports if p.name not in input_map]
         if missing:
@@ -158,9 +161,7 @@ class ModuleDef:
 
         module_lower = self.name.lower()
 
-        same_count = sum(
-            1 for c in calls if c.target_name == self.name
-        )
+        same_count = sum(1 for c in calls if c.target_name == self.name)
         suffix = f"_{same_count}" if same_count > 0 else ""
 
         output_ids: List[str] = []
@@ -186,7 +187,7 @@ class ModuleDef:
             return _MultiInstanceOutputProxy(outputs_dict)
 
 
-def _instance_assignment_names(func: Callable) -> List[Optional[str]]:
+def find_instance_assignment_names(func: Callable) -> List[Optional[str]]:
     """Return assignment targets for ModuleDef calls in source order."""
     try:
         source = inspect.getsource(func)
@@ -199,14 +200,12 @@ def _instance_assignment_names(func: Callable) -> List[Optional[str]]:
         return []
 
     module_names = {
-        name
-        for name, value in func.__globals__.items()
-        if isinstance(value, ModuleDef)
+        name for name, value in func.__globals__.items() if isinstance(value, ModuleDef)
     }
 
     names: List[Optional[str]] = []
 
-    def _call_target(node: ast.AST) -> Optional[str]:
+    def module_call_target(node: ast.AST) -> Optional[str]:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id in module_names:
                 return node.func.id
@@ -214,7 +213,7 @@ def _instance_assignment_names(func: Callable) -> List[Optional[str]]:
 
     class Visitor(ast.NodeVisitor):
         def visit_Assign(self, node: ast.Assign) -> None:
-            if _call_target(node.value):
+            if module_call_target(node.value):
                 target = node.targets[0] if node.targets else None
                 if isinstance(target, ast.Name):
                     names.append(target.id)
@@ -224,7 +223,7 @@ def _instance_assignment_names(func: Callable) -> List[Optional[str]]:
             self.generic_visit(node)
 
         def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-            if _call_target(node.value):
+            if module_call_target(node.value):
                 if isinstance(node.target, ast.Name):
                     names.append(node.target.id)
                 else:
@@ -233,7 +232,7 @@ def _instance_assignment_names(func: Callable) -> List[Optional[str]]:
             self.generic_visit(node)
 
         def visit_Call(self, node: ast.Call) -> None:
-            if _call_target(node):
+            if module_call_target(node):
                 names.append(None)
                 return
             self.generic_visit(node)
@@ -242,7 +241,7 @@ def _instance_assignment_names(func: Callable) -> List[Optional[str]]:
     return names
 
 
-def _build_module(func: Callable, patterns: object = None) -> ModuleDef:
+def build_module_definition(func: Callable, patterns: object = None) -> ModuleDef:
     """Decorator that converts a typed Python function into a :class:`ModuleDef`.
 
     Input ports come from function parameters annotated with ``In[N]`` or ``Clock``.
@@ -354,7 +353,7 @@ def _build_module(func: Callable, patterns: object = None) -> ModuleDef:
     finally:
         _capture_ctx.calls = None
 
-    for inst, name in zip(instances, _instance_assignment_names(func)):
+    for inst, name in zip(instances, find_instance_assignment_names(func)):
         inst.name = name
 
     if isinstance(result, str) and result.strip():
@@ -384,7 +383,7 @@ def module(func: Optional[Callable] = None, *, patterns: object = None):
     Both ``@module`` and ``@module(patterns=[...])`` are supported.
     """
     if func is None:
-        return lambda decorated: _build_module(decorated, patterns)
+        return lambda decorated: build_module_definition(decorated, patterns)
     if not callable(func):
         raise TypeError("@module expects a callable")
-    return _build_module(func, patterns)
+    return build_module_definition(func, patterns)

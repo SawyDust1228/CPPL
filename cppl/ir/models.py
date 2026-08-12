@@ -86,14 +86,14 @@ class RegOp:
 
 @dataclass(frozen=True)
 class MemOp:
-    id: List[str]           # one output per read port
-    op: str                 # "mem"
-    width: int              # element bit width
-    depth: int              # number of entries
-    clock: str              # clock signal ref
-    reset: str              # optional reset signal ref
-    reads: tuple            # ((addr_ref, enable_ref), ...)
-    writes: tuple           # ((addr_ref, data_ref, enable_ref), ...)
+    id: List[str]  # one output per read port
+    op: str  # "mem"
+    width: int  # element bit width
+    depth: int  # number of entries
+    clock: str  # clock signal ref
+    reset: str  # optional reset signal ref
+    reads: tuple  # ((addr_ref, enable_ref), ...)
+    writes: tuple  # ((addr_ref, data_ref, enable_ref), ...)
     name: str = ""
     initFile: str = ""
     initFormat: str = "hex"
@@ -115,22 +115,52 @@ class OutputOp:
 
 
 Operation = Union[
-    ConstantOp, UnaryOp, BinaryOp, VariadicOp,
-    ExtractOp, MuxOp, CastOp, RegOp, MemOp, InstanceOp, OutputOp,
+    ConstantOp,
+    UnaryOp,
+    BinaryOp,
+    VariadicOp,
+    ExtractOp,
+    MuxOp,
+    CastOp,
+    RegOp,
+    MemOp,
+    InstanceOp,
+    OutputOp,
 ]
 
 UNARY_OPS = frozenset({"not", "neg", "reverse"})
-BINARY_OPS = frozenset({
-    "add", "sub", "mul", "div", "div_s",
-    "mod_u", "mod_s",
-    "and", "or", "xor",
-    "shl", "shr_u", "shr_s",
-})
+BINARY_OPS = frozenset(
+    {
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "div_s",
+        "mod_u",
+        "mod_s",
+        "and",
+        "or",
+        "xor",
+        "shl",
+        "shr_u",
+        "shr_s",
+    }
+)
 VARIADIC_OPS = frozenset({"concat"})
-COMPARE_OPS = frozenset({
-    "eq", "ne", "lt_s", "lt_u", "ge_s", "ge_u",
-    "gt_s", "gt_u", "le_s", "le_u",
-})
+COMPARE_OPS = frozenset(
+    {
+        "eq",
+        "ne",
+        "lt_s",
+        "lt_u",
+        "ge_s",
+        "ge_u",
+        "gt_s",
+        "gt_u",
+        "le_s",
+        "le_u",
+    }
+)
 REDUCE_OPS = frozenset({"or_reduce", "and_reduce", "xor_reduce"})
 CAST_OPS = frozenset({"sext", "zext"})
 

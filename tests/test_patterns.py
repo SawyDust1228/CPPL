@@ -40,7 +40,7 @@ def reset_fake_backend():
     FakeBackend.prompts = []
 
 
-def _config(tmp_path):
+def agent_test_config(tmp_path):
     return AgentConfig(
         cache_dir=tmp_path / "cache",
         cache_enabled=True,
@@ -53,19 +53,24 @@ def _config(tmp_path):
 
 class TestPatternDSL:
     def test_module_accepts_cases_and_sequences(self):
-        @module(patterns=[
-            Case({"a": -1}, {"out": 0x1FF}, name=" all ones "),
-            Sequence([
-                Step(inputs={"a": 1}),
-                Step(outputs={"out": 1}),
-            ]),
-        ])
+        @module(
+            patterns=[
+                Case({"a": -1}, {"out": 0x1FF}, name=" all ones "),
+                Sequence(
+                    [
+                        Step(inputs={"a": 1}),
+                        Step(outputs={"out": 1}),
+                    ]
+                ),
+            ]
+        )
         def M(a: In[8]) -> Out[8]:
             """out equals a."""
             pass
 
         assert [pattern.name for pattern in M.patterns] == [
-            "all ones", "sequence[1]",
+            "all ones",
+            "sequence[1]",
         ]
         assert dict(M.patterns[0].inputs) == {"a": 0xFF}
         assert dict(M.patterns[0].outputs) == {"out": 0xFF}
@@ -86,12 +91,18 @@ class TestPatternDSL:
             ([Case({"a": 0}, {})], "at least one output"),
             ([Sequence([])], "at least one step"),
             ([Sequence([Step(inputs={"a": 0})])], "at least one output"),
-            ([Case({"a": 0}, {"out": 0}, name="x"),
-              Case({"a": 1}, {"out": 1}, name="x")], "Duplicate"),
+            (
+                [
+                    Case({"a": 0}, {"out": 0}, name="x"),
+                    Case({"a": 1}, {"out": 1}, name="x"),
+                ],
+                "Duplicate",
+            ),
         ],
     )
     def test_invalid_patterns_fail_during_decoration(self, patterns, match):
         with pytest.raises(ValueError, match=match):
+
             @module(patterns=patterns)
             def M(a: In[1]) -> Out[1]:
                 """out equals a."""
@@ -100,37 +111,46 @@ class TestPatternDSL:
 
 class TestPatternRunner:
     def test_case_and_sequence_run_from_independent_reset_state(self):
-        raw = [{
-            "name": "Reg",
-            "ports": {
-                "clk": {"dir": "input", "width": 1},
-                "d": {"dir": "input", "width": 8},
-                "q": {"dir": "output", "width": 8},
-            },
-            "body": [
-                {"id": "r", "op": "reg", "args": ["d"], "clock": "clk"},
-                {"op": "output", "args": {"q": "r"}},
-            ],
-        }]
+        raw = [
+            {
+                "name": "Reg",
+                "ports": {
+                    "clk": {"dir": "input", "width": 1},
+                    "d": {"dir": "input", "width": 8},
+                    "q": {"dir": "output", "width": 8},
+                },
+                "body": [
+                    {"id": "r", "op": "reg", "args": ["d"], "clock": "clk"},
+                    {"op": "output", "args": {"q": "r"}},
+                ],
+            }
+        ]
         patterns = (
-            Sequence([
-                Step({"clk": 0, "d": 7}),
-                Step({"clk": 1}, {"q": 7}),
-            ], name="capture"),
+            Sequence(
+                [
+                    Step({"clk": 0, "d": 7}),
+                    Step({"clk": 1}, {"q": 7}),
+                ],
+                name="capture",
+            ),
             Case({"clk": 0}, {"q": 0}, name="fresh_state"),
         )
         modules = parse_design(raw)
         assert run_patterns(modules, "Reg", patterns, widths=infer_widths(modules)) == 2
 
     def test_mismatch_contains_repair_details(self):
-        modules = parse_design([{
-            "name": "M",
-            "ports": {
-                "a": {"dir": "input", "width": 8},
-                "out": {"dir": "output", "width": 8},
-            },
-            "body": [{"op": "output", "args": {"out": "a"}}],
-        }])
+        modules = parse_design(
+            [
+                {
+                    "name": "M",
+                    "ports": {
+                        "a": {"dir": "input", "width": 8},
+                        "out": {"dir": "output", "width": 8},
+                    },
+                    "body": [{"op": "output", "args": {"out": "a"}}],
+                }
+            ]
+        )
         with pytest.raises(PatternMismatch) as error:
             run_patterns(
                 modules,
@@ -153,14 +173,16 @@ class TestCompilePatternLoop:
 
         FakeBackend.responses = [
             json.dumps([{"op": "output", "args": {"out": "a"}}]),
-            json.dumps([
-                {"id": "one", "op": "constant", "value": 1, "width": 8},
-                {"id": "sum", "op": "add", "args": ["a", "one"]},
-                {"op": "output", "args": {"out": "sum"}},
-            ]),
+            json.dumps(
+                [
+                    {"id": "one", "op": "constant", "value": 1, "width": 8},
+                    {"id": "sum", "op": "add", "args": ["a", "one"]},
+                    {"op": "output", "args": {"out": "sum"}},
+                ]
+            ),
         ]
         report = CompilationCoordinator(
-            _config(tmp_path),
+            agent_test_config(tmp_path),
             backend_factory=FakeBackend,
             model_identity={"model": "fake"},
         ).compile([M], max_retries=2)
@@ -186,7 +208,7 @@ class TestCompilePatternLoop:
         bad = json.dumps([{"op": "output", "args": {"out": "a"}}])
         FakeBackend.responses = [bad, bad]
         coordinator = CompilationCoordinator(
-            _config(tmp_path),
+            agent_test_config(tmp_path),
             backend_factory=FakeBackend,
             model_identity={"model": "fake"},
         )
@@ -206,13 +228,15 @@ class TestCompilePatternLoop:
         good = json.dumps([{"op": "output", "args": {"out": "a"}}])
         FakeBackend.responses = [good]
         first = CompilationCoordinator(
-            _config(tmp_path), backend_factory=FakeBackend,
+            agent_test_config(tmp_path),
+            backend_factory=FakeBackend,
             model_identity={"model": "fake"},
         ).compile([M])
         assert first.success
 
         calls = []
         from cppl.agents import worker as worker_module
+
         original = worker_module.run_patterns
 
         def recording_runner(*args, **kwargs):
@@ -221,7 +245,8 @@ class TestCompilePatternLoop:
 
         monkeypatch.setattr(worker_module, "run_patterns", recording_runner)
         second = CompilationCoordinator(
-            _config(tmp_path), backend_factory=FakeBackend,
+            agent_test_config(tmp_path),
+            backend_factory=FakeBackend,
             model_identity={"model": "fake"},
         ).compile([M])
         assert second.success
@@ -242,7 +267,7 @@ class TestCompilePatternLoop:
 
         # Equalize the symbol name to isolate pattern identity.
         B.name = A.name
-        config = _config(tmp_path).resolve()
+        config = agent_test_config(tmp_path).resolve()
         cache = ModuleCache(config, {"model": "fake"})
         assert cache.key_for(A) != cache.key_for(B)
 
@@ -254,7 +279,7 @@ class TestCompilePatternLoop:
 
         dependency_a = [{"name": "Child", "body": [{"version": 1}]}]
         dependency_b = [{"name": "Child", "body": [{"version": 2}]}]
-        cache = ModuleCache(_config(tmp_path).resolve(), {"model": "fake"})
+        cache = ModuleCache(agent_test_config(tmp_path).resolve(), {"model": "fake"})
         assert cache.key_for(Parent, dependency_a) != cache.key_for(
             Parent, dependency_b
         )
@@ -271,15 +296,18 @@ class TestCompilePatternLoop:
             return f"out equals {child}."
 
         FakeBackend.responses = [
-            json.dumps([
-                {"id": "one", "op": "constant", "value": 1, "width": 8},
-                {"id": "sum", "op": "add", "args": ["a", "one"]},
-                {"op": "output", "args": {"out": "sum"}},
-            ]),
+            json.dumps(
+                [
+                    {"id": "one", "op": "constant", "value": 1, "width": 8},
+                    {"id": "sum", "op": "add", "args": ["a", "one"]},
+                    {"op": "output", "args": {"out": "sum"}},
+                ]
+            ),
             json.dumps([{"op": "output", "args": {"out": "child_out"}}]),
         ]
         report = CompilationCoordinator(
-            _config(tmp_path), backend_factory=FakeBackend,
+            agent_test_config(tmp_path),
+            backend_factory=FakeBackend,
             model_identity={"model": "fake"},
         ).compile([Child, Parent])
         assert report.success
@@ -297,7 +325,8 @@ class TestCompilePatternLoop:
             return f"out equals {child}."
 
         report = CompilationCoordinator(
-            _config(tmp_path), backend_factory=FakeBackend,
+            agent_test_config(tmp_path),
+            backend_factory=FakeBackend,
             model_identity={"model": "fake"},
         ).compile([Parent])
         module_report = report.module_reports["Parent"]

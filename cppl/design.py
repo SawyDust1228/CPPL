@@ -36,19 +36,19 @@ class Design:
         """
         seen = {m.name for m in self._modules}
         for mod in mods:
-            self._add_recursive(mod, seen)
+            self.add_recursive(mod, seen)
         self._compiled = None
         self.last_compile_report = None
         return self
 
-    def _add_recursive(self, mod: ModuleDef, seen: set) -> None:
+    def add_recursive(self, mod: ModuleDef, seen: set) -> None:
         """Walk instance calls depth-first, adding dependencies before *mod*."""
         if mod.name in seen:
             return
         seen.add(mod.name)
         for inst in mod.instances:
             if inst.target_mod is not None:
-                self._add_recursive(inst.target_mod, seen)
+                self.add_recursive(inst.target_mod, seen)
         self._modules.append(mod)
 
     def compile(self, max_retries: int = 3) -> List[dict]:
@@ -80,7 +80,7 @@ class Design:
         """Return the compiled design as a pretty-printed JSON string."""
         return json.dumps(self.compile(max_retries=max_retries), indent=2)
 
-    def _ir_pipeline(self, max_retries: int = 3):
+    def run_ir_pipeline(self, max_retries: int = 3):
         """Run parse → validate → infer and return (modules, widths)."""
         modules_json = self.compile(max_retries=max_retries)
         modules = parse_design(json.dumps(modules_json))
@@ -92,7 +92,7 @@ class Design:
         """Compile and generate MLIR text."""
         from .codegen.circt import generate_mlir
 
-        modules, widths = self._ir_pipeline(max_retries=max_retries)
+        modules, widths = self.run_ir_pipeline(max_retries=max_retries)
         return generate_mlir(modules, widths, top=top)
 
     def to_verilog(
@@ -104,7 +104,7 @@ class Design:
         """Compile and generate Verilog text."""
         from .codegen.circt import generate_verilog
 
-        modules, widths = self._ir_pipeline(max_retries=max_retries)
+        modules, widths = self.run_ir_pipeline(max_retries=max_retries)
         return generate_verilog(modules, widths, top=top, optimize=optimize)
 
     def interpreter(
@@ -115,5 +115,5 @@ class Design:
         """Compile the design and return a stateful IR interpreter."""
         from .ir.interpreter import Interpreter
 
-        modules, widths = self._ir_pipeline(max_retries=max_retries)
+        modules, widths = self.run_ir_pipeline(max_retries=max_retries)
         return Interpreter(modules, widths=widths, top=top)

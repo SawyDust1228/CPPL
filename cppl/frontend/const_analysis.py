@@ -9,7 +9,7 @@ from typing import Optional
 from .module import InstanceCall
 
 
-def _literal_int(ref: object) -> Optional[int]:
+def parse_literal_int(ref: object) -> Optional[int]:
     if isinstance(ref, int):
         return ref
     if not isinstance(ref, str):
@@ -27,7 +27,7 @@ def _literal_int(ref: object) -> Optional[int]:
         return None
 
 
-def _collect_defined_names(ports: dict, body: list) -> set[str]:
+def collect_defined_names(ports: dict, body: list) -> set[str]:
     names = set(ports)
     for op in body:
         if not isinstance(op, dict):
@@ -53,7 +53,7 @@ def normalize_constants(
     references to the generated IDs.
     """
     out: list = []
-    used_names = _collect_defined_names(ports, body)
+    used_names = collect_defined_names(ports, body)
     value_widths = {
         name: pdef["width"]
         for name, pdef in ports.items()
@@ -61,15 +61,13 @@ def normalize_constants(
     }
     instance_inputs = {
         inst.target_name: {
-            p.name: p.width for p in inst.target_ports
-            if p.direction == "input"
+            p.name: p.width for p in inst.target_ports if p.direction == "input"
         }
         for inst in instances
     }
     instance_outputs = {
         inst.target_name: [
-            p.width for p in inst.target_ports
-            if p.direction == "output"
+            p.width for p in inst.target_ports if p.direction == "output"
         ]
         for inst in instances
     }
@@ -90,17 +88,19 @@ def normalize_constants(
 
         used_names.add(name)
         const_ids[key] = name
-        out.append({
-            "id": name,
-            "op": "constant",
-            "value": value,
-            "width": width,
-        })
+        out.append(
+            {
+                "id": name,
+                "op": "constant",
+                "value": value,
+                "width": width,
+            }
+        )
         value_widths[name] = width
         return name
 
     def normalize_ref(ref: object, width: int) -> object:
-        value = _literal_int(ref)
+        value = parse_literal_int(ref)
         if value is None:
             return ref
         return fresh_const(value, width)
@@ -128,9 +128,19 @@ def normalize_constants(
         if opname == "constant":
             value_widths[id_] = int(op.get("width", 1))
         elif opname in {
-            "eq", "ne", "lt_s", "lt_u", "ge_s", "ge_u",
-            "gt_s", "gt_u", "le_s", "le_u",
-            "or_reduce", "and_reduce", "xor_reduce",
+            "eq",
+            "ne",
+            "lt_s",
+            "lt_u",
+            "ge_s",
+            "ge_u",
+            "gt_s",
+            "gt_u",
+            "le_s",
+            "le_u",
+            "or_reduce",
+            "and_reduce",
+            "xor_reduce",
         }:
             value_widths[id_] = 1
         elif opname in {"sext", "zext", "extract"}:
@@ -146,8 +156,19 @@ def normalize_constants(
             if args:
                 value_widths[id_] = width_of(args[0])
         elif opname in {
-            "add", "sub", "mul", "div", "div_s", "mod_u", "mod_s",
-            "and", "or", "xor", "shl", "shr_u", "shr_s",
+            "add",
+            "sub",
+            "mul",
+            "div",
+            "div_s",
+            "mod_u",
+            "mod_s",
+            "and",
+            "or",
+            "xor",
+            "shl",
+            "shr_u",
+            "shr_s",
         }:
             args = op.get("args", [])
             if args:
@@ -169,16 +190,40 @@ def normalize_constants(
         opname = op.get("op")
 
         if opname in {
-            "not", "neg", "reverse", "or_reduce", "and_reduce", "xor_reduce",
+            "not",
+            "neg",
+            "reverse",
+            "or_reduce",
+            "and_reduce",
+            "xor_reduce",
         }:
             args = op.get("args", [])
             if len(args) == 1:
                 args[0] = normalize_ref(args[0], width_of(args[0]))
         elif opname in {
-            "add", "sub", "mul", "div", "div_s", "mod_u", "mod_s",
-            "and", "or", "xor", "shl", "shr_u", "shr_s",
-            "eq", "ne", "lt_s", "lt_u", "ge_s", "ge_u",
-            "gt_s", "gt_u", "le_s", "le_u",
+            "add",
+            "sub",
+            "mul",
+            "div",
+            "div_s",
+            "mod_u",
+            "mod_s",
+            "and",
+            "or",
+            "xor",
+            "shl",
+            "shr_u",
+            "shr_s",
+            "eq",
+            "ne",
+            "lt_s",
+            "lt_u",
+            "ge_s",
+            "ge_u",
+            "gt_s",
+            "gt_u",
+            "le_s",
+            "le_u",
         }:
             args = op.get("args", [])
             if len(args) == 2:

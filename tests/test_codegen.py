@@ -11,14 +11,14 @@ from cppl.ir.validator import validate_design
 from cppl.ir.infer import infer_widths
 
 
-def _compile(json_str: str) -> str:
+def compile_fixture(json_str: str) -> str:
     modules = parse_design(json_str)
     validate_design(modules)
     widths = infer_widths(modules)
     return generate_mlir(modules, widths)
 
 
-def _compile_verilog(json_str: str) -> str:
+def compile_verilog_fixture(json_str: str) -> str:
     modules = parse_design(json_str)
     validate_design(modules)
     widths = infer_widths(modules)
@@ -27,51 +27,51 @@ def _compile_verilog(json_str: str) -> str:
 
 class TestWidthInference:
     def test_binary_width_mismatch(self):
-        raw = '''[
+        raw = """[
           {"name":"A","ports":{"x":{"dir":"input","width":8},"y":{"dir":"input","width":4},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"add","args":["x","y"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         with pytest.raises(WidthError, match="different widths"):
             infer_widths(modules)
 
     def test_extract_out_of_bounds(self):
-        raw = '''[
+        raw = """[
           {"name":"A","ports":{"x":{"dir":"input","width":8},"o":{"dir":"output","width":4}},
            "body":[
              {"id":"e","op":"extract","args":["x"],"lowBit":6,"width":4},
              {"op":"output","args":{"o":"e"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         with pytest.raises(WidthError, match="exceeds source width"):
             infer_widths(modules)
 
     def test_output_width_mismatch(self):
-        raw = '''[
+        raw = """[
           {"name":"A","ports":{"x":{"dir":"input","width":8},"o":{"dir":"output","width":4}},
            "body":[
              {"op":"output","args":{"o":"x"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         with pytest.raises(WidthError, match="output port.*expects width"):
             infer_widths(modules)
 
     def test_concat_width(self):
-        raw = '''[
+        raw = """[
           {"name":"A","ports":{"x":{"dir":"input","width":4},"y":{"dir":"input","width":4},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"c","op":"concat","args":["x","y"]},
              {"op":"output","args":{"o":"c"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         widths = infer_widths(modules)
@@ -80,14 +80,14 @@ class TestWidthInference:
 
 class TestCodegen:
     def test_adder(self):
-        raw = '''[
+        raw = """[
           {"name":"Adder8","ports":{"a":{"dir":"input","width":8},"b":{"dir":"input","width":8},"sum":{"dir":"output","width":8}},
            "body":[
              {"id":"result","op":"add","args":["a","b"]},
              {"op":"output","args":{"sum":"result"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "module {" in mlir or "builtin.module" in mlir
         assert "hw.module @Adder8" in mlir
         assert "comb.add" in mlir
@@ -95,98 +95,107 @@ class TestCodegen:
         assert "i8" in mlir
 
     def test_constant(self):
-        raw = '''[
+        raw = """[
           {"name":"C","ports":{"o":{"dir":"output","width":8}},
            "body":[
              {"id":"c","op":"constant","value":42,"width":8},
              {"op":"output","args":{"o":"c"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "hw.constant 42 : i8" in mlir
 
     def test_constant_hex(self):
-        raw = '''[
+        raw = """[
           {"name":"C","ports":{"o":{"dir":"output","width":8}},
            "body":[
              {"id":"c","op":"constant","value":"0xff","width":8},
              {"op":"output","args":{"o":"c"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         # CIRCT normalizes 0xff (255) to -1 for i8 (signed representation)
         assert "hw.constant" in mlir
         assert "i8" in mlir
 
     def test_not_lowering(self):
-        raw = '''[
+        raw = """[
           {"name":"N","ports":{"x":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"n","op":"not","args":["x"]},
              {"op":"output","args":{"o":"n"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "hw.constant -1 : i8" in mlir
         assert "comb.xor" in mlir
 
     def test_neg_lowering(self):
-        raw = '''[
+        raw = """[
           {"name":"N","ports":{"x":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"n","op":"neg","args":["x"]},
              {"op":"output","args":{"o":"n"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "hw.constant -1 : i8" in mlir
         assert "comb.xor" in mlir
         assert "hw.constant 1 : i8" in mlir
         assert "comb.add" in mlir
 
     def test_extract(self):
-        raw = '''[
+        raw = """[
           {"name":"E","ports":{"x":{"dir":"input","width":8},"o":{"dir":"output","width":4}},
            "body":[
              {"id":"e","op":"extract","args":["x"],"lowBit":2,"width":4},
              {"op":"output","args":{"o":"e"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.extract" in mlir
         assert "from 2" in mlir
         assert "(i8) -> i4" in mlir
 
     def test_concat(self):
-        raw = '''[
+        raw = """[
           {"name":"C","ports":{"x":{"dir":"input","width":4},"y":{"dir":"input","width":4},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"c","op":"concat","args":["x","y"]},
              {"op":"output","args":{"o":"c"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.concat" in mlir
         assert "i4, i4" in mlir
 
     def test_all_binary_ops(self):
         ops = ["add", "sub", "mul", "div", "and", "or", "xor", "shl", "shr_u", "shr_s"]
-        expected = ["comb.add", "comb.sub", "comb.mul", "comb.divu",
-                    "comb.and", "comb.or", "comb.xor", "comb.shl",
-                    "comb.shru", "comb.shrs"]
+        expected = [
+            "comb.add",
+            "comb.sub",
+            "comb.mul",
+            "comb.divu",
+            "comb.and",
+            "comb.or",
+            "comb.xor",
+            "comb.shl",
+            "comb.shru",
+            "comb.shrs",
+        ]
         for op, circt_op in zip(ops, expected):
-            raw = f'''[
+            raw = f"""[
               {{"name":"T","ports":{{"a":{{"dir":"input","width":8}},"b":{{"dir":"input","width":8}},"o":{{"dir":"output","width":8}}}},
                "body":[
                  {{"id":"r","op":"{op}","args":["a","b"]}},
                  {{"op":"output","args":{{"o":"r"}}}}
                ]}}
-            ]'''
-            mlir = _compile(raw)
+            ]"""
+            mlir = compile_fixture(raw)
             assert circt_op in mlir, f"Expected {circt_op} for op '{op}'"
 
     def test_instance(self):
-        raw = '''[
+        raw = """[
           {"name":"Sub","ports":{"i":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[{"op":"output","args":{"o":"i"}}]},
           {"name":"Top","ports":{"x":{"dir":"input","width":8},"y":{"dir":"output","width":8}},
@@ -194,109 +203,109 @@ class TestCodegen:
              {"id":["r"],"op":"instance","module":"Sub","args":{"i":"x"}},
              {"op":"output","args":{"y":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "hw.instance" in mlir
         assert "@Sub" in mlir
 
     def test_reg_basic(self):
-        raw = '''[
+        raw = """[
           {"name":"R","ports":{"clk":{"dir":"input","width":1},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"reg","args":["d"],"clock":"clk"},
              {"op":"output","args":{"q":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "seq.compreg" in mlir
         assert "seq.to_clock" in mlir
         assert "i8" in mlir
 
     def test_reg_with_reset(self):
-        raw = '''[
+        raw = """[
           {"name":"R","ports":{"clk":{"dir":"input","width":1},"rst":{"dir":"input","width":1},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"reg","args":["d"],"clock":"clk","reset":"rst","resetValue":0},
              {"op":"output","args":{"q":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "seq.compreg" in mlir
         assert "seq.to_clock" in mlir
 
     def test_reg_with_enable(self):
-        raw = '''[
+        raw = """[
           {"name":"R","ports":{"clk":{"dir":"input","width":1},"en":{"dir":"input","width":1},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"reg","args":["d"],"clock":"clk","enable":"en"},
              {"op":"output","args":{"q":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "seq.compreg.ce" in mlir
         assert "seq.to_clock" in mlir
 
     def test_reg_full(self):
-        raw = '''[
+        raw = """[
           {"name":"R","ports":{"clk":{"dir":"input","width":1},"rst":{"dir":"input","width":1},"en":{"dir":"input","width":1},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"reg","args":["d"],"clock":"clk","reset":"rst","resetValue":0,"enable":"en"},
              {"op":"output","args":{"q":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "seq.compreg.ce" in mlir
         assert "seq.to_clock" in mlir
 
 
 class TestRegWidthInference:
     def test_reg_clock_width_error(self):
-        raw = '''[
+        raw = """[
           {"name":"R","ports":{"clk":{"dir":"input","width":8},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"reg","args":["d"],"clock":"clk"},
              {"op":"output","args":{"q":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         with pytest.raises(WidthError, match="clock.*must be 1-bit"):
             infer_widths(modules)
 
     def test_reg_reset_width_error(self):
-        raw = '''[
+        raw = """[
           {"name":"R","ports":{"clk":{"dir":"input","width":1},"rst":{"dir":"input","width":8},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"reg","args":["d"],"clock":"clk","reset":"rst","resetValue":0},
              {"op":"output","args":{"q":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         with pytest.raises(WidthError, match="reset.*must be 1-bit"):
             infer_widths(modules)
 
     def test_reg_enable_width_error(self):
-        raw = '''[
+        raw = """[
           {"name":"R","ports":{"clk":{"dir":"input","width":1},"en":{"dir":"input","width":8},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"reg","args":["d"],"clock":"clk","enable":"en"},
              {"op":"output","args":{"q":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         with pytest.raises(WidthError, match="enable.*must be 1-bit"):
             infer_widths(modules)
 
     def test_reg_output_width_equals_data_width(self):
-        raw = '''[
+        raw = """[
           {"name":"R","ports":{"clk":{"dir":"input","width":1},"d":{"dir":"input","width":16},"q":{"dir":"output","width":16}},
            "body":[
              {"id":"r","op":"reg","args":["d"],"clock":"clk"},
              {"op":"output","args":{"q":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         widths = infer_widths(modules)
@@ -305,34 +314,34 @@ class TestRegWidthInference:
 
 class TestVerilog:
     def test_combinational_verilog(self):
-        raw = '''[
+        raw = """[
           {"name":"Adder8","ports":{"a":{"dir":"input","width":8},"b":{"dir":"input","width":8},"sum":{"dir":"output","width":8}},
            "body":[
              {"id":"result","op":"add","args":["a","b"]},
              {"op":"output","args":{"sum":"result"}}
            ]}
-        ]'''
-        verilog = _compile_verilog(raw)
+        ]"""
+        verilog = compile_verilog_fixture(raw)
         assert "module Adder8" in verilog
         assert "input" in verilog
         assert "output" in verilog
         assert "endmodule" in verilog
 
     def test_register_verilog(self):
-        raw = '''[
+        raw = """[
           {"name":"RegMod","ports":{"clk":{"dir":"input","width":1},"rst":{"dir":"input","width":1},"d":{"dir":"input","width":8},"q":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"reg","args":["d"],"clock":"clk","reset":"rst","resetValue":0},
              {"op":"output","args":{"q":"r"}}
            ]}
-        ]'''
-        verilog = _compile_verilog(raw)
+        ]"""
+        verilog = compile_verilog_fixture(raw)
         assert "module RegMod" in verilog
         assert "always_ff" in verilog or "always @" in verilog
         assert "endmodule" in verilog
 
 
-HIERARCHY_JSON = '''[
+HIERARCHY_JSON = """[
   {"name":"Leaf","ports":{"i":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
    "body":[{"op":"output","args":{"o":"i"}}]},
   {"name":"Mid","ports":{"x":{"dir":"input","width":8},"y":{"dir":"output","width":8}},
@@ -347,7 +356,7 @@ HIERARCHY_JSON = '''[
    ]},
   {"name":"Unrelated","ports":{"p":{"dir":"input","width":4},"q":{"dir":"output","width":4}},
    "body":[{"op":"output","args":{"q":"p"}}]}
-]'''
+]"""
 
 
 class TestTop:
@@ -391,51 +400,51 @@ class TestTop:
 
 class TestNewOps:
     def test_mux(self):
-        raw = '''[
+        raw = """[
           {"name":"M","ports":{"s":{"dir":"input","width":1},"a":{"dir":"input","width":8},"b":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"mux","args":["s","a","b"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.mux" in mlir
         assert "i8" in mlir
 
     def test_mux_width_inference(self):
-        raw = '''[
+        raw = """[
           {"name":"M","ports":{"s":{"dir":"input","width":1},"a":{"dir":"input","width":8},"b":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"mux","args":["s","a","b"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         widths = infer_widths(modules)
         assert widths["M"]["r"].width == 8
 
     def test_mux_sel_must_be_1bit(self):
-        raw = '''[
+        raw = """[
           {"name":"M","ports":{"s":{"dir":"input","width":2},"a":{"dir":"input","width":8},"b":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"mux","args":["s","a","b"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         with pytest.raises(WidthError, match="mux selector.*must be 1-bit"):
             infer_widths(modules)
 
     def test_mux_operand_width_mismatch(self):
-        raw = '''[
+        raw = """[
           {"name":"M","ports":{"s":{"dir":"input","width":1},"a":{"dir":"input","width":8},"b":{"dir":"input","width":4},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"mux","args":["s","a","b"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         with pytest.raises(WidthError, match="mux true/false.*different widths"):
@@ -444,195 +453,195 @@ class TestNewOps:
     def test_compare_ops(self):
         ops = ["eq", "ne", "lt_s", "lt_u", "ge_s", "ge_u"]
         for op in ops:
-            raw = f'''[
+            raw = f"""[
               {{"name":"T","ports":{{"a":{{"dir":"input","width":8}},"b":{{"dir":"input","width":8}},"o":{{"dir":"output","width":1}}}},
                "body":[
                  {{"id":"r","op":"{op}","args":["a","b"]}},
                  {{"op":"output","args":{{"o":"r"}}}}
                ]}}
-            ]'''
-            mlir = _compile(raw)
+            ]"""
+            mlir = compile_fixture(raw)
             assert "comb.icmp" in mlir, f"Expected comb.icmp for op '{op}'"
 
     def test_compare_output_width(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":32},"b":{"dir":"input","width":32},"o":{"dir":"output","width":1}},
            "body":[
              {"id":"r","op":"eq","args":["a","b"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         widths = infer_widths(modules)
         assert widths["T"]["r"].width == 1
 
     def test_or_reduce(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"o":{"dir":"output","width":1}},
            "body":[
              {"id":"r","op":"or_reduce","args":["a"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.icmp" in mlir
 
     def test_and_reduce(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"o":{"dir":"output","width":1}},
            "body":[
              {"id":"r","op":"and_reduce","args":["a"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.icmp" in mlir
 
     def test_reduce_output_width(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":16},"o":{"dir":"output","width":1}},
            "body":[
              {"id":"r","op":"or_reduce","args":["a"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         widths = infer_widths(modules)
         assert widths["T"]["r"].width == 1
 
     def test_sext(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"o":{"dir":"output","width":32}},
            "body":[
              {"id":"r","op":"sext","args":["a"],"width":32},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.replicate" in mlir
         assert "comb.concat" in mlir
 
     def test_zext(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"o":{"dir":"output","width":32}},
            "body":[
              {"id":"r","op":"zext","args":["a"],"width":32},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "hw.constant 0 : i24" in mlir
         assert "comb.concat" in mlir
 
     def test_cast_width_inference(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"o":{"dir":"output","width":32}},
            "body":[
              {"id":"r","op":"sext","args":["a"],"width":32},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         widths = infer_widths(modules)
         assert widths["T"]["r"].width == 32
 
     def test_cast_target_too_small(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"o":{"dir":"output","width":4}},
            "body":[
              {"id":"r","op":"sext","args":["a"],"width":4},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         with pytest.raises(WidthError, match="target width.*less than"):
             infer_widths(modules)
 
     def test_sext_same_width(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"sext","args":["a"],"width":8},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "hw.module @T" in mlir
 
     def test_divs(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"b":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"div_s","args":["a","b"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.divs" in mlir
 
     def test_modu(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"b":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"mod_u","args":["a","b"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.modu" in mlir
 
     def test_mods(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"b":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"mod_s","args":["a","b"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.mods" in mlir
 
     def test_gt_le_compare_ops(self):
         ops = ["gt_s", "gt_u", "le_s", "le_u"]
         for op in ops:
-            raw = f'''[
+            raw = f"""[
               {{"name":"T","ports":{{"a":{{"dir":"input","width":8}},"b":{{"dir":"input","width":8}},"o":{{"dir":"output","width":1}}}},
                "body":[
                  {{"id":"r","op":"{op}","args":["a","b"]}},
                  {{"op":"output","args":{{"o":"r"}}}}
                ]}}
-            ]'''
-            mlir = _compile(raw)
+            ]"""
+            mlir = compile_fixture(raw)
             assert "comb.icmp" in mlir, f"Expected comb.icmp for op '{op}'"
 
     def test_xor_reduce(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"o":{"dir":"output","width":1}},
            "body":[
              {"id":"r","op":"xor_reduce","args":["a"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.parity" in mlir
 
     def test_reverse(self):
-        raw = '''[
+        raw = """[
           {"name":"T","ports":{"a":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
            "body":[
              {"id":"r","op":"reverse","args":["a"]},
              {"op":"output","args":{"o":"r"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "comb.reverse" in mlir
 
 
-MEM_BASIC_JSON = '''[
+MEM_BASIC_JSON = """[
   {"name":"MemTest",
    "ports":{
      "clk":{"dir":"input","width":1},"rst":{"dir":"input","width":1},
@@ -647,25 +656,25 @@ MEM_BASIC_JSON = '''[
       "writes":[{"addr":"addr","data":"wdata","enable":"wen"}]},
      {"op":"output","args":{"rdata":"rd"}}
    ]}
-]'''
+]"""
 
 
 class TestMem:
     def test_mem_basic(self):
-        mlir = _compile(MEM_BASIC_JSON)
+        mlir = compile_fixture(MEM_BASIC_JSON)
         assert "seq.hlmem" in mlir
         assert "seq.read" in mlir
         assert "seq.write" in mlir
 
     def test_mem_verilog(self):
-        verilog = _compile_verilog(MEM_BASIC_JSON)
+        verilog = compile_verilog_fixture(MEM_BASIC_JSON)
         assert "module MemTest" in verilog
         assert "reg" in verilog.lower()
         assert "always_ff" in verilog or "always @" in verilog
         assert "endmodule" in verilog
 
     def test_mem_multi_read(self):
-        raw = '''[
+        raw = """[
           {"name":"M",
            "ports":{
              "clk":{"dir":"input","width":1},"rst":{"dir":"input","width":1},
@@ -685,14 +694,14 @@ class TestMem:
               "writes":[{"addr":"waddr","data":"wdata","enable":"wen"}]},
              {"op":"output","args":{"rd1":"r1","rd2":"r2"}}
            ]}
-        ]'''
-        mlir = _compile(raw)
+        ]"""
+        mlir = compile_fixture(raw)
         assert "seq.hlmem" in mlir
         # Two read ports
         assert mlir.count("seq.read") == 2
 
     def test_mem_width_inference(self):
-        raw = '''[
+        raw = """[
           {"name":"M",
            "ports":{
              "clk":{"dir":"input","width":1},"rst":{"dir":"input","width":1},
@@ -707,7 +716,7 @@ class TestMem:
               "writes":[{"addr":"addr","data":"wdata","enable":"wen"}]},
              {"op":"output","args":{"rdata":"rd"}}
            ]}
-        ]'''
+        ]"""
         modules = parse_design(raw)
         validate_design(modules)
         widths = infer_widths(modules)

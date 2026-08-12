@@ -26,22 +26,22 @@ def validate_design(modules: List[Module], *, strict: bool = True) -> None:
     are run: combinational cycle detection.  These catch common LLM-generated
     errors and feed back into the retry loop.
     """
-    module_map = _check_module_names(modules)
+    module_map = check_module_names(modules)
     for mod in modules:
-        _check_ports(mod)
-        _check_ssa_and_terminator(mod)
-        _check_output_coverage(mod)
+        check_ports(mod)
+        check_ssa_and_terminator(mod)
+        check_output_coverage(mod)
     # Cross-module checks (instances) require the full module map
     for mod in modules:
-        _check_instances(mod, module_map)
+        check_instances(mod, module_map)
     # Static analysis checks (strict mode)
     if strict:
         dependency_cache: Dict[str, Dict[str, Set[str]]] = {}
         for mod in modules:
-            _check_combinational_cycles(mod, module_map, dependency_cache)
+            check_combinational_cycles(mod, module_map, dependency_cache)
 
 
-def _check_module_names(modules: List[Module]) -> Dict[str, Module]:
+def check_module_names(modules: List[Module]) -> Dict[str, Module]:
     seen: Dict[str, Module] = {}
     for mod in modules:
         if mod.name in seen:
@@ -50,7 +50,7 @@ def _check_module_names(modules: List[Module]) -> Dict[str, Module]:
     return seen
 
 
-def _check_ports(mod: Module) -> None:
+def check_ports(mod: Module) -> None:
     if not mod.ports:
         raise ValidationError(f"Module '{mod.name}': must have at least one port")
     for pname, pdef in mod.ports.items():
@@ -73,7 +73,7 @@ def _check_ports(mod: Module) -> None:
                 )
 
 
-def _check_ssa_and_terminator(mod: Module) -> None:
+def check_ssa_and_terminator(mod: Module) -> None:
     ctx = f"Module '{mod.name}'"
 
     if not mod.body:
@@ -105,24 +105,28 @@ def _check_ssa_and_terminator(mod: Module) -> None:
     # Pass 1: collect all defined IDs
     for i, op in enumerate(mod.body):
         loc = f"{ctx} body[{i}]"
-        _define_ids(op, defined, loc)
+        define_ids(op, defined, loc)
 
     # Pass 2: check all references are to defined values
     for i, op in enumerate(mod.body):
         loc = f"{ctx} body[{i}]"
-        _check_args_defined(op, defined, loc)
+        check_arguments_defined(op, defined, loc)
 
 
-def _check_args_defined(op: Operation, defined: Set[str], loc: str) -> None:
+def check_arguments_defined(op: Operation, defined: Set[str], loc: str) -> None:
     """Check that all argument references are to already-defined values."""
     if isinstance(op, OutputOp):
         for port, ref in op.args.items():
             if ref not in defined:
-                raise SSAError(f"{loc}: output port '{port}' references undefined value '{ref}'")
+                raise SSAError(
+                    f"{loc}: output port '{port}' references undefined value '{ref}'"
+                )
     elif isinstance(op, InstanceOp):
         for port, ref in op.args.items():
             if ref not in defined:
-                raise SSAError(f"{loc}: instance arg '{port}' references undefined value '{ref}'")
+                raise SSAError(
+                    f"{loc}: instance arg '{port}' references undefined value '{ref}'"
+                )
     elif isinstance(op, ConstantOp):
         pass  # no args to check
     elif isinstance(op, RegOp):
@@ -142,16 +146,26 @@ def _check_args_defined(op: Operation, defined: Set[str], loc: str) -> None:
             raise SSAError(f"{loc}: reset references undefined value '{op.reset}'")
         for i, (addr, enable) in enumerate(op.reads):
             if addr not in defined:
-                raise SSAError(f"{loc}: reads[{i}].addr references undefined value '{addr}'")
+                raise SSAError(
+                    f"{loc}: reads[{i}].addr references undefined value '{addr}'"
+                )
             if enable not in defined:
-                raise SSAError(f"{loc}: reads[{i}].enable references undefined value '{enable}'")
+                raise SSAError(
+                    f"{loc}: reads[{i}].enable references undefined value '{enable}'"
+                )
         for i, (addr, data, enable) in enumerate(op.writes):
             if addr not in defined:
-                raise SSAError(f"{loc}: writes[{i}].addr references undefined value '{addr}'")
+                raise SSAError(
+                    f"{loc}: writes[{i}].addr references undefined value '{addr}'"
+                )
             if data not in defined:
-                raise SSAError(f"{loc}: writes[{i}].data references undefined value '{data}'")
+                raise SSAError(
+                    f"{loc}: writes[{i}].data references undefined value '{data}'"
+                )
             if enable not in defined:
-                raise SSAError(f"{loc}: writes[{i}].enable references undefined value '{enable}'")
+                raise SSAError(
+                    f"{loc}: writes[{i}].enable references undefined value '{enable}'"
+                )
     else:
         # UnaryOp, BinaryOp, VariadicOp, ExtractOp — all have args as list[str]
         for arg in op.args:
@@ -159,7 +173,7 @@ def _check_args_defined(op: Operation, defined: Set[str], loc: str) -> None:
                 raise SSAError(f"{loc}: references undefined value '{arg}'")
 
 
-def _define_ids(op: Operation, defined: Set[str], loc: str) -> None:
+def define_ids(op: Operation, defined: Set[str], loc: str) -> None:
     """Register new value IDs, checking for shadowing."""
     if isinstance(op, OutputOp):
         return  # output doesn't define new values
@@ -175,7 +189,7 @@ def _define_ids(op: Operation, defined: Set[str], loc: str) -> None:
         defined.add(id_)
 
 
-def _check_output_coverage(mod: Module) -> None:
+def check_output_coverage(mod: Module) -> None:
     """OutputOp args keys must exactly match the module's output port set."""
     ctx = f"Module '{mod.name}'"
     output_ports: Set[str] = {
@@ -189,16 +203,12 @@ def _check_output_coverage(mod: Module) -> None:
     extra = provided - output_ports
 
     if missing:
-        raise ValidationError(
-            f"{ctx}: output op missing ports: {sorted(missing)}"
-        )
+        raise ValidationError(f"{ctx}: output op missing ports: {sorted(missing)}")
     if extra:
-        raise ValidationError(
-            f"{ctx}: output op has extra ports: {sorted(extra)}"
-        )
+        raise ValidationError(f"{ctx}: output op has extra ports: {sorted(extra)}")
 
 
-def _check_instances(mod: Module, module_map: Dict[str, Module]) -> None:
+def check_instances(mod: Module, module_map: Dict[str, Module]) -> None:
     """Validate InstanceOp references: module exists, ports match."""
     ctx = f"Module '{mod.name}'"
     instance_names: Set[str] = set()
@@ -247,7 +257,7 @@ def _check_instances(mod: Module, module_map: Dict[str, Module]) -> None:
             )
 
 
-def _module_output_input_deps(
+def module_output_input_dependencies(
     mod: Module,
     module_map: Dict[str, Module],
     cache: Dict[str, Dict[str, Set[str]]],
@@ -283,21 +293,21 @@ def _module_output_input_deps(
         elif isinstance(op, MemOp):
             for idx, (addr, enable) in enumerate(op.reads):
                 out_id = op.id[idx]
-                deps[out_id] = set(deps.get(addr, set())) | set(
-                    deps.get(enable, set())
-                )
+                deps[out_id] = set(deps.get(addr, set())) | set(deps.get(enable, set()))
             # Write ports are sequential and do not affect read outputs here.
 
         elif isinstance(op, InstanceOp):
             target = module_map.get(op.module)
             child_deps = (
-                _module_output_input_deps(target, module_map, cache, active)
-                if target is not None else {}
+                module_output_input_dependencies(target, module_map, cache, active)
+                if target is not None
+                else {}
             )
             target_outputs = []
             if target is not None:
                 target_outputs = [
-                    name for name, pdef in target.ports.items()
+                    name
+                    for name, pdef in target.ports.items()
                     if pdef.dir == PortDir.OUTPUT
                 ]
             for out_id, child_out in zip(op.id, target_outputs):
@@ -317,16 +327,13 @@ def _module_output_input_deps(
 
     last = mod.body[-1]
     assert isinstance(last, OutputOp)
-    result = {
-        port: set(deps.get(ref, set()))
-        for port, ref in last.args.items()
-    }
+    result = {port: set(deps.get(ref, set())) for port, ref in last.args.items()}
     active.remove(mod.name)
     cache[mod.name] = result
     return result
 
 
-def _build_comb_graph(
+def build_combinational_graph(
     mod: Module,
     module_map: Dict[str, Module],
     dependency_cache: Dict[str, Dict[str, Set[str]]],
@@ -369,13 +376,15 @@ def _build_comb_graph(
         elif isinstance(op, InstanceOp):
             target = module_map.get(op.module)
             child_deps = (
-                _module_output_input_deps(target, module_map, dependency_cache)
-                if target is not None else {}
+                module_output_input_dependencies(target, module_map, dependency_cache)
+                if target is not None
+                else {}
             )
             target_outputs = []
             if target is not None:
                 target_outputs = [
-                    name for name, pdef in target.ports.items()
+                    name
+                    for name, pdef in target.ports.items()
                     if pdef.dir == PortDir.OUTPUT
                 ]
             for out_id in op.id:
@@ -403,18 +412,18 @@ def _build_comb_graph(
 _WHITE, _GRAY, _BLACK = 0, 1, 2
 
 
-def _check_combinational_cycles(
+def check_combinational_cycles(
     mod: Module,
     module_map: Dict[str, Module],
     dependency_cache: Dict[str, Dict[str, Set[str]]],
 ) -> None:
     """Detect combinational cycles using DFS with 3-color marking."""
-    graph = _build_comb_graph(mod, module_map, dependency_cache)
+    graph = build_combinational_graph(mod, module_map, dependency_cache)
 
     color: Dict[str, int] = {node: _WHITE for node in graph}
     parent: Dict[str, str] = {}
 
-    def _dfs(node: str) -> None:
+    def visit_dependency(node: str) -> None:
         color[node] = _GRAY
         for neighbor in graph.get(node, []):
             if neighbor not in color:
@@ -435,9 +444,9 @@ def _check_combinational_cycles(
                 )
             if color[neighbor] == _WHITE:
                 parent[neighbor] = node
-                _dfs(neighbor)
+                visit_dependency(neighbor)
         color[node] = _BLACK
 
     for node in list(graph.keys()):
         if color[node] == _WHITE:
-            _dfs(node)
+            visit_dependency(node)
