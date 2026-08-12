@@ -1,0 +1,57 @@
+[
+  {
+    "name": "BasicReg",
+    "ports": {
+      "clk": {"dir": "input", "width": 1},
+      "d":   {"dir": "input", "width": 8},
+      "q":   {"dir": "output", "width": 8}
+    },
+    "body": [
+      {"id": "q_reg", "op": "reg", "args": ["d"], "clock": "clk"},
+      {"op": "output", "args": {"q": "q_reg"}}
+    ]
+  },
+  {
+    "name": "RegWithReset",
+    "ports": {
+      "clk": {"dir": "input", "width": 1},
+      "rst": {"dir": "input", "width": 1},
+      "d":   {"dir": "input", "width": 8},
+      "q":   {"dir": "output", "width": 8}
+    },
+    "body": [
+      {"id": "q_reg", "op": "reg", "args": ["d"], "clock": "clk",
+       "reset": "rst", "resetValue": 0},
+      {"op": "output", "args": {"q": "q_reg"}}
+    ]
+  },
+  {
+    "name": "RegWithEnable",
+    "ports": {
+      "clk": {"dir": "input", "width": 1},
+      "en":  {"dir": "input", "width": 1},
+      "d":   {"dir": "input", "width": 8},
+      "q":   {"dir": "output", "width": 8}
+    },
+    "body": [
+      {"id": "q_reg", "op": "reg", "args": ["d"], "clock": "clk",
+       "enable": "en"},
+      {"op": "output", "args": {"q": "q_reg"}}
+    ]
+  },
+  {
+    "name": "RegFull",
+    "ports": {
+      "clk": {"dir": "input", "width": 1},
+      "rst": {"dir": "input", "width": 1},
+      "en":  {"dir": "input", "width": 1},
+      "d":   {"dir": "input", "width": 8},
+      "q":   {"dir": "output", "width": 8}
+    },
+    "body": [
+      {"id": "q_reg", "op": "reg", "args": ["d"], "clock": "clk",
+       "reset": "rst", "resetValue": 0, "enable": "en"},
+      {"op": "output", "args": {"q": "q_reg"}}
+    ]
+  }
+]

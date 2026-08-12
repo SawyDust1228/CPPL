@@ -1,0 +1,28 @@
+[
+  {
+    "name": "ALU",
+    "ports": {
+      "data_a": { "dir": "input", "width": 8 },
+      "data_b": { "dir": "input", "width": 8 },
+      "result_add": { "dir": "output", "width": 8 },
+      "result_sub": { "dir": "output", "width": 8 },
+      "result_and": { "dir": "output", "width": 8 },
+      "result_xor": { "dir": "output", "width": 8 }
+    },
+    "body": [
+      { "id": "sum", "op": "add", "args": ["data_a", "data_b"] },
+      { "id": "diff", "op": "sub", "args": ["data_a", "data_b"] },
+      { "id": "and_res", "op": "and", "args": ["data_a", "data_b"] },
+      { "id": "xor_res", "op": "xor", "args": ["data_a", "data_b"] },
+      {
+        "op": "output",
+        "args": {
+          "result_add": "sum",
+          "result_sub": "diff",
+          "result_and": "and_res",
+          "result_xor": "xor_res"
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "name": "PassThrough",
+  "ports": {
+    "x": { "dir": "input", "width": 8 },
+    "y": { "dir": "output", "width": 8 }
+  },
+  "body": [
+    { "op": "output", "args": { "y": "x" } }
+  ]
+}

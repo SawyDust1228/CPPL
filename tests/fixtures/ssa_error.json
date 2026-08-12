@@ -1,0 +1,10 @@
+{
+  "name": "Bad",
+  "ports": {
+    "x": { "dir": "input", "width": 8 }
+  },
+  "body": [
+    { "id": "r", "op": "add", "args": ["x", "undefined"] },
+    { "op": "output", "args": {} }
+  ]
+}

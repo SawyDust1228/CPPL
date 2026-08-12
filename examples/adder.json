@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Adder8",
+    "ports": {
+      "a": { "dir": "input", "width": 8 },
+      "b": { "dir": "input", "width": 8 },
+      "sum": { "dir": "output", "width": 8 }
+    },
+    "body": [
+      { "id": "result", "op": "add", "args": ["a", "b"] },
+      { "op": "output", "args": { "sum": "result" } }
+    ]
+  }
+]

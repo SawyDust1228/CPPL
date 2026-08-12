@@ -1,0 +1,4289 @@
+[
+  {
+    "name": "ALU",
+    "ports": {
+      "A": {
+        "dir": "input",
+        "width": 32
+      },
+      "B": {
+        "dir": "input",
+        "width": 32
+      },
+      "alu_op": {
+        "dir": "input",
+        "width": 4
+      },
+      "out": {
+        "dir": "output",
+        "width": 32
+      },
+      "sum": {
+        "dir": "output",
+        "width": 32
+      }
+    },
+    "body": [
+      {
+        "_comment": "--- ALU operations: 16-way mux on alu_op ---"
+      },
+      {
+        "_comment": "--- op0: ADD = A + B ---"
+      },
+      {
+        "id": "alu_add",
+        "op": "add",
+        "args": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "_comment": "--- op1: SUB = A - B ---"
+      },
+      {
+        "id": "alu_sub",
+        "op": "sub",
+        "args": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "_comment": "--- op2: AND ---"
+      },
+      {
+        "id": "alu_and",
+        "op": "and",
+        "args": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "_comment": "--- op3: OR ---"
+      },
+      {
+        "id": "alu_or",
+        "op": "or",
+        "args": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "_comment": "--- op4: XOR ---"
+      },
+      {
+        "id": "alu_xor",
+        "op": "xor",
+        "args": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "_comment": "--- op5: SLT (signed less than) -> zext to 32 ---"
+      },
+      {
+        "id": "slt_bit",
+        "op": "lt_s",
+        "args": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "id": "alu_slt",
+        "op": "zext",
+        "args": [
+          "slt_bit"
+        ],
+        "width": 32
+      },
+      {
+        "_comment": "--- op6: SLL (shift left logical) ---"
+      },
+      {
+        "id": "alu_sll",
+        "op": "shl",
+        "args": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "_comment": "--- op7: SLTU (unsigned less than) -> zext to 32 ---"
+      },
+      {
+        "id": "sltu_bit",
+        "op": "lt_u",
+        "args": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "id": "alu_sltu",
+        "op": "zext",
+        "args": [
+          "sltu_bit"
+        ],
+        "width": 32
+      },
+      {
+        "_comment": "--- op8: SRL (shift right logical) ---"
+      },
+      {
+        "id": "alu_srl",
+        "op": "shr_u",
+        "args": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "_comment": "--- op9: SRA (shift right arithmetic) ---"
+      },
+      {
+        "id": "alu_sra",
+        "op": "shr_s",
+        "args": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "_comment": "--- op10: COPY_A ---"
+      },
+      {
+        "_comment": "--- op11: COPY_B ---"
+      },
+      {
+        "_comment": "--- op12-15: also B (padding) ---"
+      },
+      {
+        "_comment": "--- Build 16-way mux via 4-bit selector decomposition ---"
+      },
+      {
+        "id": "sel0",
+        "op": "extract",
+        "args": [
+          "alu_op"
+        ],
+        "lowBit": 0,
+        "width": 1
+      },
+      {
+        "id": "sel1",
+        "op": "extract",
+        "args": [
+          "alu_op"
+        ],
+        "lowBit": 1,
+        "width": 1
+      },
+      {
+        "id": "sel2",
+        "op": "extract",
+        "args": [
+          "alu_op"
+        ],
+        "lowBit": 2,
+        "width": 1
+      },
+      {
+        "id": "sel3",
+        "op": "extract",
+        "args": [
+          "alu_op"
+        ],
+        "lowBit": 3,
+        "width": 1
+      },
+      {
+        "_comment": "--- Layer 1: 8 pairs ---"
+      },
+      {
+        "id": "m0",
+        "op": "mux",
+        "args": [
+          "sel0",
+          "alu_add",
+          "alu_sub"
+        ]
+      },
+      {
+        "id": "m1",
+        "op": "mux",
+        "args": [
+          "sel0",
+          "alu_and",
+          "alu_or"
+        ]
+      },
+      {
+        "id": "m2",
+        "op": "mux",
+        "args": [
+          "sel0",
+          "alu_xor",
+          "alu_slt"
+        ]
+      },
+      {
+        "id": "m3",
+        "op": "mux",
+        "args": [
+          "sel0",
+          "alu_sll",
+          "alu_sltu"
+        ]
+      },
+      {
+        "id": "m4",
+        "op": "mux",
+        "args": [
+          "sel0",
+          "alu_srl",
+          "alu_sra"
+        ]
+      },
+      {
+        "id": "m5",
+        "op": "mux",
+        "args": [
+          "sel0",
+          "A",
+          "B"
+        ]
+      },
+      {
+        "id": "m6",
+        "op": "mux",
+        "args": [
+          "sel0",
+          "B",
+          "B"
+        ]
+      },
+      {
+        "id": "m7",
+        "op": "mux",
+        "args": [
+          "sel0",
+          "B",
+          "B"
+        ]
+      },
+      {
+        "_comment": "--- Layer 2: 4 pairs ---"
+      },
+      {
+        "id": "m8",
+        "op": "mux",
+        "args": [
+          "sel1",
+          "m0",
+          "m1"
+        ]
+      },
+      {
+        "id": "m9",
+        "op": "mux",
+        "args": [
+          "sel1",
+          "m2",
+          "m3"
+        ]
+      },
+      {
+        "id": "m10",
+        "op": "mux",
+        "args": [
+          "sel1",
+          "m4",
+          "m5"
+        ]
+      },
+      {
+        "id": "m11",
+        "op": "mux",
+        "args": [
+          "sel1",
+          "m6",
+          "m7"
+        ]
+      },
+      {
+        "_comment": "--- Layer 3: 2 pairs ---"
+      },
+      {
+        "id": "m12",
+        "op": "mux",
+        "args": [
+          "sel2",
+          "m8",
+          "m9"
+        ]
+      },
+      {
+        "id": "m13",
+        "op": "mux",
+        "args": [
+          "sel2",
+          "m10",
+          "m11"
+        ]
+      },
+      {
+        "_comment": "--- Layer 4: final ---"
+      },
+      {
+        "id": "alu_out",
+        "op": "mux",
+        "args": [
+          "sel3",
+          "m12",
+          "m13"
+        ]
+      },
+      {
+        "_comment": "--- sum output: mux(alu_op[0], A+B, A-B) ---"
+      },
+      {
+        "id": "alu_sum",
+        "op": "mux",
+        "args": [
+          "sel0",
+          "alu_add",
+          "alu_sub"
+        ]
+      },
+      {
+        "op": "output",
+        "args": {
+          "out": "alu_out",
+          "sum": "alu_sum"
+        }
+      }
+    ]
+  },
+  {
+    "name": "BRU",
+    "ports": {
+      "rs1": {
+        "dir": "input",
+        "width": 32
+      },
+      "rs2": {
+        "dir": "input",
+        "width": 32
+      },
+      "br_type": {
+        "dir": "input",
+        "width": 3
+      },
+      "taken": {
+        "dir": "output",
+        "width": 1
+      }
+    },
+    "body": [
+      {
+        "_comment": "--- Branch comparisons ---"
+      },
+      {
+        "_comment": "--- 0: false (rs1 != rs1 => always false) ---"
+      },
+      {
+        "id": "c_false",
+        "op": "constant",
+        "value": 0,
+        "width": 1
+      },
+      {
+        "_comment": "--- 1: LTU (unsigned) ---"
+      },
+      {
+        "id": "c_ltu",
+        "op": "lt_u",
+        "args": [
+          "rs1",
+          "rs2"
+        ]
+      },
+      {
+        "_comment": "--- 2: LT (signed) ---"
+      },
+      {
+        "id": "c_lt",
+        "op": "lt_s",
+        "args": [
+          "rs1",
+          "rs2"
+        ]
+      },
+      {
+        "_comment": "--- 3: EQ ---"
+      },
+      {
+        "id": "c_eq",
+        "op": "eq",
+        "args": [
+          "rs1",
+          "rs2"
+        ]
+      },
+      {
+        "_comment": "--- 4: GEU (unsigned) ---"
+      },
+      {
+        "id": "c_geu",
+        "op": "ge_u",
+        "args": [
+          "rs1",
+          "rs2"
+        ]
+      },
+      {
+        "_comment": "--- 5: GE (signed) ---"
+      },
+      {
+        "id": "c_ge",
+        "op": "ge_s",
+        "args": [
+          "rs1",
+          "rs2"
+        ]
+      },
+      {
+        "_comment": "--- 6: NE ---"
+      },
+      {
+        "id": "c_ne",
+        "op": "ne",
+        "args": [
+          "rs1",
+          "rs2"
+        ]
+      },
+      {
+        "_comment": "--- 7: true (same as false placeholder) ---"
+      },
+      {
+        "id": "c_true_placeholder",
+        "op": "constant",
+        "value": 0,
+        "width": 1
+      },
+      {
+        "_comment": "--- 8-way mux on br_type[2:0] ---"
+      },
+      {
+        "id": "bt0",
+        "op": "extract",
+        "args": [
+          "br_type"
+        ],
+        "lowBit": 0,
+        "width": 1
+      },
+      {
+        "id": "bt1",
+        "op": "extract",
+        "args": [
+          "br_type"
+        ],
+        "lowBit": 1,
+        "width": 1
+      },
+      {
+        "id": "bt2",
+        "op": "extract",
+        "args": [
+          "br_type"
+        ],
+        "lowBit": 2,
+        "width": 1
+      },
+      {
+        "id": "bm0",
+        "op": "mux",
+        "args": [
+          "bt0",
+          "c_false",
+          "c_ltu"
+        ]
+      },
+      {
+        "id": "bm1",
+        "op": "mux",
+        "args": [
+          "bt0",
+          "c_lt",
+          "c_eq"
+        ]
+      },
+      {
+        "id": "bm2",
+        "op": "mux",
+        "args": [
+          "bt0",
+          "c_geu",
+          "c_ge"
+        ]
+      },
+      {
+        "id": "bm3",
+        "op": "mux",
+        "args": [
+          "bt0",
+          "c_ne",
+          "c_true_placeholder"
+        ]
+      },
+      {
+        "id": "bm4",
+        "op": "mux",
+        "args": [
+          "bt1",
+          "bm0",
+          "bm1"
+        ]
+      },
+      {
+        "id": "bm5",
+        "op": "mux",
+        "args": [
+          "bt1",
+          "bm2",
+          "bm3"
+        ]
+      },
+      {
+        "id": "br_taken",
+        "op": "mux",
+        "args": [
+          "bt2",
+          "bm4",
+          "bm5"
+        ]
+      },
+      {
+        "op": "output",
+        "args": {
+          "taken": "br_taken"
+        }
+      }
+    ]
+  },
+  {
+    "name": "Immgen",
+    "ports": {
+      "insn": {
+        "dir": "input",
+        "width": 32
+      },
+      "sel": {
+        "dir": "input",
+        "width": 3
+      },
+      "out": {
+        "dir": "output",
+        "width": 32
+      }
+    },
+    "body": [
+      {
+        "_comment": "--- Extract instruction fields ---"
+      },
+      {
+        "id": "insn_31",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 31,
+        "width": 1
+      },
+      {
+        "id": "insn_20_31",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 20,
+        "width": 12
+      },
+      {
+        "id": "insn_25_31",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 25,
+        "width": 7
+      },
+      {
+        "id": "insn_7_12",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 7,
+        "width": 5
+      },
+      {
+        "id": "insn_12_20",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 12,
+        "width": 20
+      },
+      {
+        "id": "insn_12_20_8",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 12,
+        "width": 8
+      },
+      {
+        "id": "insn_20",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 20,
+        "width": 1
+      },
+      {
+        "id": "insn_25_31_6",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 25,
+        "width": 6
+      },
+      {
+        "id": "insn_21_25",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 21,
+        "width": 4
+      },
+      {
+        "id": "insn_7",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 7,
+        "width": 1
+      },
+      {
+        "id": "insn_8_12",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 8,
+        "width": 4
+      },
+      {
+        "id": "insn_15_20",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 15,
+        "width": 5
+      },
+      {
+        "_comment": "--- Format 0: I-type (JALR: sign-extend insn[31:20] & ~1) ---"
+      },
+      {
+        "id": "imm_i_raw",
+        "op": "sext",
+        "args": [
+          "insn_20_31"
+        ],
+        "width": 32
+      },
+      {
+        "id": "mask_fe",
+        "op": "constant",
+        "value": "0xfffffffe",
+        "width": 32
+      },
+      {
+        "id": "imm_0",
+        "op": "and",
+        "args": [
+          "imm_i_raw",
+          "mask_fe"
+        ]
+      },
+      {
+        "_comment": "--- Format 1: I-type (standard: sign-extend insn[31:20]) ---"
+      },
+      {
+        "id": "imm_1",
+        "op": "sext",
+        "args": [
+          "insn_20_31"
+        ],
+        "width": 32
+      },
+      {
+        "_comment": "--- Format 2: S-type: {insn[31:25], insn[11:7]} sign-extended ---"
+      },
+      {
+        "id": "s_concat",
+        "op": "concat",
+        "args": [
+          "insn_25_31",
+          "insn_7_12"
+        ]
+      },
+      {
+        "id": "imm_2",
+        "op": "sext",
+        "args": [
+          "s_concat"
+        ],
+        "width": 32
+      },
+      {
+        "_comment": "--- Format 3: U-type: {insn[31:12], 12'b0} sign-extended ---"
+      },
+      {
+        "id": "u_zeros",
+        "op": "constant",
+        "value": 0,
+        "width": 12
+      },
+      {
+        "id": "u_concat",
+        "op": "concat",
+        "args": [
+          "insn_12_20",
+          "u_zeros"
+        ]
+      },
+      {
+        "_comment": "--- Format 4: J-type: {insn[31], insn[19:12], insn[20], insn[30:25], insn[24:21], 1'b0} ---"
+      },
+      {
+        "id": "j_zero",
+        "op": "constant",
+        "value": 0,
+        "width": 1
+      },
+      {
+        "id": "j_concat",
+        "op": "concat",
+        "args": [
+          "insn_31",
+          "insn_12_20_8",
+          "insn_20",
+          "insn_25_31_6",
+          "insn_21_25",
+          "j_zero"
+        ]
+      },
+      {
+        "id": "imm_4",
+        "op": "sext",
+        "args": [
+          "j_concat"
+        ],
+        "width": 32
+      },
+      {
+        "_comment": "--- Format 5: B-type: {insn[31], insn[7], insn[30:25], insn[11:8]} sign-extended ---"
+      },
+      {
+        "id": "b_concat",
+        "op": "concat",
+        "args": [
+          "insn_31",
+          "insn_7",
+          "insn_25_31_6",
+          "insn_8_12"
+        ]
+      },
+      {
+        "id": "imm_5",
+        "op": "sext",
+        "args": [
+          "b_concat"
+        ],
+        "width": 32
+      },
+      {
+        "_comment": "--- Format 6: Z-type (CSR zimm): zero-extend insn[19:15] ---"
+      },
+      {
+        "id": "imm_6",
+        "op": "zext",
+        "args": [
+          "insn_15_20"
+        ],
+        "width": 32
+      },
+      {
+        "_comment": "--- 8-way mux on sel ---"
+      },
+      {
+        "id": "s0",
+        "op": "extract",
+        "args": [
+          "sel"
+        ],
+        "lowBit": 0,
+        "width": 1
+      },
+      {
+        "id": "s1",
+        "op": "extract",
+        "args": [
+          "sel"
+        ],
+        "lowBit": 1,
+        "width": 1
+      },
+      {
+        "id": "s2",
+        "op": "extract",
+        "args": [
+          "sel"
+        ],
+        "lowBit": 2,
+        "width": 1
+      },
+      {
+        "id": "im0",
+        "op": "mux",
+        "args": [
+          "s0",
+          "imm_0",
+          "imm_1"
+        ]
+      },
+      {
+        "id": "im1",
+        "op": "mux",
+        "args": [
+          "s0",
+          "imm_2",
+          "u_concat"
+        ]
+      },
+      {
+        "id": "im2",
+        "op": "mux",
+        "args": [
+          "s0",
+          "imm_4",
+          "imm_5"
+        ]
+      },
+      {
+        "id": "im3",
+        "op": "mux",
+        "args": [
+          "s0",
+          "imm_6",
+          "imm_0"
+        ]
+      },
+      {
+        "id": "im4",
+        "op": "mux",
+        "args": [
+          "s1",
+          "im0",
+          "im1"
+        ]
+      },
+      {
+        "id": "im5",
+        "op": "mux",
+        "args": [
+          "s1",
+          "im2",
+          "im3"
+        ]
+      },
+      {
+        "id": "imm_out",
+        "op": "mux",
+        "args": [
+          "s2",
+          "im4",
+          "im5"
+        ]
+      },
+      {
+        "op": "output",
+        "args": {
+          "out": "imm_out"
+        }
+      }
+    ]
+  },
+  {
+    "name": "Control",
+    "ports": {
+      "insn": {
+        "dir": "input",
+        "width": 32
+      },
+      "ctrl_sig": {
+        "dir": "output",
+        "width": 27
+      }
+    },
+    "body": [
+      {
+        "_comment": "=== Control Signal Encoding (27-bit packed) ==="
+      },
+      {
+        "_comment": "Bit layout: [26:illegal][25:23:csr_cmd][22:wb_en][21:20:wb_sel][19:17:ld_type][16:15:st_type][14:12:br_type][11:inst_kill][10:7:alu_op][6:4:imm_sel][3:B_sel][2:A_sel][1:0:pc_sel]"
+      },
+      {
+        "_comment": "--- Default: illegal instruction ---"
+      },
+      {
+        "id": "default_ctrl",
+        "op": "constant",
+        "value": "0x4000000",
+        "width": 27
+      },
+      {
+        "_comment": "--- Extract opcode fields for matching ---"
+      },
+      {
+        "id": "opcode",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 0,
+        "width": 7
+      },
+      {
+        "id": "funct3",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 12,
+        "width": 3
+      },
+      {
+        "id": "funct7",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 25,
+        "width": 7
+      },
+      {
+        "_comment": "=== Instruction Pattern Matching ==="
+      },
+      {
+        "_comment": "--- LUI: opcode=0110111 => ctrl={pc_sel=0, A_sel=0(PC), B_sel=0(IMM), imm_sel=3(U), alu_op=11(COPY_B), br_type=0, inst_kill=0, st_type=0, ld_type=0, wb_sel=0(ALU), wb_en=1, csr_cmd=0, illegal=0} ---"
+      },
+      {
+        "id": "op_lui",
+        "op": "constant",
+        "value": "0b0110111",
+        "width": 7
+      },
+      {
+        "id": "is_lui",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_lui"
+        ]
+      },
+      {
+        "_comment": "pc_sel=00, A_sel=0, B_sel=0, imm_sel=011, alu_op=1011, inst_kill=0, br_type=000, st_type=00, ld_type=000, wb_sel=00, wb_en=1, csr_cmd=000, illegal=0"
+      },
+      {
+        "id": "ctrl_lui",
+        "op": "constant",
+        "value": "0x4005b0",
+        "width": 27
+      },
+      {
+        "_comment": "--- AUIPC: opcode=0010111 ---"
+      },
+      {
+        "id": "op_auipc",
+        "op": "constant",
+        "value": "0b0010111",
+        "width": 7
+      },
+      {
+        "id": "is_auipc",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_auipc"
+        ]
+      },
+      {
+        "_comment": "pc_sel=00, A_sel=0(PC), B_sel=0(IMM), imm_sel=011(U), alu_op=0000(ADD), inst_kill=0, br_type=000, st_type=00, ld_type=000, wb_sel=00(ALU), wb_en=1, csr_cmd=000, illegal=0"
+      },
+      {
+        "id": "ctrl_auipc",
+        "op": "constant",
+        "value": "0x400030",
+        "width": 27
+      },
+      {
+        "_comment": "--- JAL: opcode=1101111 ---"
+      },
+      {
+        "id": "op_jal",
+        "op": "constant",
+        "value": "0b1101111",
+        "width": 7
+      },
+      {
+        "id": "is_jal",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_jal"
+        ]
+      },
+      {
+        "_comment": "pc_sel=01(ALU), A_sel=0(PC), B_sel=0(IMM), imm_sel=100(J), alu_op=0000(ADD), inst_kill=1, br_type=000, st_type=00, ld_type=000, wb_sel=10(PC4), wb_en=1, csr_cmd=000, illegal=0"
+      },
+      {
+        "id": "ctrl_jal",
+        "op": "constant",
+        "value": "0x606851",
+        "width": 27
+      },
+      {
+        "_comment": "--- JALR: opcode=1100111 ---"
+      },
+      {
+        "id": "op_jalr",
+        "op": "constant",
+        "value": "0b1100111",
+        "width": 7
+      },
+      {
+        "id": "is_jalr",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_jalr"
+        ]
+      },
+      {
+        "_comment": "pc_sel=01(ALU), A_sel=1(RS1), B_sel=0(IMM), imm_sel=001(I), alu_op=0000(ADD), inst_kill=1, br_type=000, st_type=00, ld_type=000, wb_sel=10(PC4), wb_en=1, csr_cmd=000, illegal=0"
+      },
+      {
+        "id": "ctrl_jalr",
+        "op": "constant",
+        "value": "0x607815",
+        "width": 27
+      },
+      {
+        "_comment": "--- Branch: opcode=1100011 ---"
+      },
+      {
+        "id": "op_branch",
+        "op": "constant",
+        "value": "0b1100011",
+        "width": 7
+      },
+      {
+        "id": "is_branch",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_branch"
+        ]
+      },
+      {
+        "_comment": "--- Branch type from funct3 ---"
+      },
+      {
+        "_comment": "BEQ=000->3, BNE=001->6, BLT=100->2, BGE=101->5, BLTU=110->1, BGEU=111->4"
+      },
+      {
+        "id": "f3_000",
+        "op": "constant",
+        "value": 0,
+        "width": 3
+      },
+      {
+        "id": "f3_001",
+        "op": "constant",
+        "value": 1,
+        "width": 3
+      },
+      {
+        "id": "f3_100",
+        "op": "constant",
+        "value": 4,
+        "width": 3
+      },
+      {
+        "id": "f3_101",
+        "op": "constant",
+        "value": 5,
+        "width": 3
+      },
+      {
+        "id": "f3_110",
+        "op": "constant",
+        "value": 6,
+        "width": 3
+      },
+      {
+        "id": "f3_111",
+        "op": "constant",
+        "value": 7,
+        "width": 3
+      },
+      {
+        "id": "is_beq",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_000"
+        ]
+      },
+      {
+        "id": "is_bne",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_001"
+        ]
+      },
+      {
+        "id": "is_blt",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_100"
+        ]
+      },
+      {
+        "id": "is_bge",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_101"
+        ]
+      },
+      {
+        "id": "is_bltu",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_110"
+        ]
+      },
+      {
+        "id": "is_bgeu",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_111"
+        ]
+      },
+      {
+        "_comment": "br_type encoding: BEQ=3, BNE=6, BLT=2, BGE=5, BLTU=1, BGEU=4"
+      },
+      {
+        "id": "br_beq",
+        "op": "constant",
+        "value": 3,
+        "width": 3
+      },
+      {
+        "id": "br_bne",
+        "op": "constant",
+        "value": 6,
+        "width": 3
+      },
+      {
+        "id": "br_blt",
+        "op": "constant",
+        "value": 2,
+        "width": 3
+      },
+      {
+        "id": "br_bge",
+        "op": "constant",
+        "value": 5,
+        "width": 3
+      },
+      {
+        "id": "br_bltu",
+        "op": "constant",
+        "value": 1,
+        "width": 3
+      },
+      {
+        "id": "br_bgeu",
+        "op": "constant",
+        "value": 4,
+        "width": 3
+      },
+      {
+        "id": "br_xxx",
+        "op": "constant",
+        "value": 0,
+        "width": 3
+      },
+      {
+        "id": "br0",
+        "op": "mux",
+        "args": [
+          "is_bgeu",
+          "br_xxx",
+          "br_bgeu"
+        ]
+      },
+      {
+        "id": "br1",
+        "op": "mux",
+        "args": [
+          "is_bltu",
+          "br0",
+          "br_bltu"
+        ]
+      },
+      {
+        "id": "br2",
+        "op": "mux",
+        "args": [
+          "is_bge",
+          "br1",
+          "br_bge"
+        ]
+      },
+      {
+        "id": "br3",
+        "op": "mux",
+        "args": [
+          "is_blt",
+          "br2",
+          "br_blt"
+        ]
+      },
+      {
+        "id": "br4",
+        "op": "mux",
+        "args": [
+          "is_bne",
+          "br3",
+          "br_bne"
+        ]
+      },
+      {
+        "id": "br_type_val",
+        "op": "mux",
+        "args": [
+          "is_beq",
+          "br4",
+          "br_beq"
+        ]
+      },
+      {
+        "_comment": "Branch ctrl base: pc_sel=00, A_sel=0(PC), B_sel=0(IMM), imm_sel=101(B), alu_op=0000(ADD), inst_kill=0, st_type=00, ld_type=000, wb_sel=00, wb_en=0, csr_cmd=000, illegal=0"
+      },
+      {
+        "_comment": "Base without br_type = 0x00000050"
+      },
+      {
+        "id": "br_base_lo",
+        "op": "constant",
+        "value": "0x40",
+        "width": 12
+      },
+      {
+        "id": "br_base_hi",
+        "op": "constant",
+        "value": 0,
+        "width": 12
+      },
+      {
+        "id": "ctrl_br",
+        "op": "concat",
+        "args": [
+          "br_base_hi",
+          "br_type_val",
+          "br_base_lo"
+        ]
+      },
+      {
+        "_comment": "--- Load: opcode=0000011 ---"
+      },
+      {
+        "id": "op_load",
+        "op": "constant",
+        "value": "0b0000011",
+        "width": 7
+      },
+      {
+        "id": "is_load",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_load"
+        ]
+      },
+      {
+        "_comment": "ld_type from funct3: LB=3, LH=2, LW=1, LBU=5, LHU=4"
+      },
+      {
+        "id": "f3_010",
+        "op": "constant",
+        "value": 2,
+        "width": 3
+      },
+      {
+        "id": "is_lw",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_010"
+        ]
+      },
+      {
+        "id": "is_lh",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_001"
+        ]
+      },
+      {
+        "id": "is_lb",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_000"
+        ]
+      },
+      {
+        "id": "is_lhu",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_101"
+        ]
+      },
+      {
+        "id": "is_lbu",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_100"
+        ]
+      },
+      {
+        "id": "ld_lw",
+        "op": "constant",
+        "value": 1,
+        "width": 3
+      },
+      {
+        "id": "ld_lh",
+        "op": "constant",
+        "value": 2,
+        "width": 3
+      },
+      {
+        "id": "ld_lb",
+        "op": "constant",
+        "value": 3,
+        "width": 3
+      },
+      {
+        "id": "ld_lhu",
+        "op": "constant",
+        "value": 4,
+        "width": 3
+      },
+      {
+        "id": "ld_lbu",
+        "op": "constant",
+        "value": 5,
+        "width": 3
+      },
+      {
+        "id": "ld_xxx",
+        "op": "constant",
+        "value": 0,
+        "width": 3
+      },
+      {
+        "id": "ld0",
+        "op": "mux",
+        "args": [
+          "is_lbu",
+          "ld_xxx",
+          "ld_lbu"
+        ]
+      },
+      {
+        "id": "ld1",
+        "op": "mux",
+        "args": [
+          "is_lhu",
+          "ld0",
+          "ld_lhu"
+        ]
+      },
+      {
+        "id": "ld2",
+        "op": "mux",
+        "args": [
+          "is_lb",
+          "ld1",
+          "ld_lb"
+        ]
+      },
+      {
+        "id": "ld3",
+        "op": "mux",
+        "args": [
+          "is_lh",
+          "ld2",
+          "ld_lh"
+        ]
+      },
+      {
+        "id": "ld_type_val",
+        "op": "mux",
+        "args": [
+          "is_lw",
+          "ld3",
+          "ld_lw"
+        ]
+      },
+      {
+        "_comment": "Load ctrl: pc_sel=10(PC_0), A_sel=1(RS1), B_sel=0(IMM), imm_sel=001(I), alu_op=0000(ADD), inst_kill=1, br_type=000, st_type=00, wb_sel=01(MEM), wb_en=1, csr_cmd=000, illegal=0"
+      },
+      {
+        "_comment": "Pack: illegal=0, csr_cmd=000, wb_en=1, wb_sel=01, ld_type=variable, st_type=00, br_type=000, inst_kill=1, alu_op=0000, imm_sel=001, B_sel=0, A_sel=1, pc_sel=10"
+      },
+      {
+        "id": "ld_const_lo",
+        "op": "constant",
+        "value": "0x816",
+        "width": 17
+      },
+      {
+        "id": "ld_const_hi",
+        "op": "constant",
+        "value": 5,
+        "width": 7
+      },
+      {
+        "id": "ctrl_load",
+        "op": "concat",
+        "args": [
+          "ld_const_hi",
+          "ld_type_val",
+          "ld_const_lo"
+        ]
+      },
+      {
+        "_comment": "--- Store: opcode=0100011 ---"
+      },
+      {
+        "id": "op_store",
+        "op": "constant",
+        "value": "0b0100011",
+        "width": 7
+      },
+      {
+        "id": "is_store",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_store"
+        ]
+      },
+      {
+        "id": "is_sb",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_000"
+        ]
+      },
+      {
+        "id": "is_sh",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_001"
+        ]
+      },
+      {
+        "id": "is_sw",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_010"
+        ]
+      },
+      {
+        "id": "st_sw",
+        "op": "constant",
+        "value": 1,
+        "width": 2
+      },
+      {
+        "id": "st_sh",
+        "op": "constant",
+        "value": 2,
+        "width": 2
+      },
+      {
+        "id": "st_sb",
+        "op": "constant",
+        "value": 3,
+        "width": 2
+      },
+      {
+        "id": "st_xxx",
+        "op": "constant",
+        "value": 0,
+        "width": 2
+      },
+      {
+        "id": "st0",
+        "op": "mux",
+        "args": [
+          "is_sb",
+          "st_xxx",
+          "st_sb"
+        ]
+      },
+      {
+        "id": "st1",
+        "op": "mux",
+        "args": [
+          "is_sh",
+          "st0",
+          "st_sh"
+        ]
+      },
+      {
+        "id": "st_type_val",
+        "op": "mux",
+        "args": [
+          "is_sw",
+          "st1",
+          "st_sw"
+        ]
+      },
+      {
+        "_comment": "Store ctrl: pc_sel=00, A_sel=1(RS1), B_sel=0(IMM), imm_sel=010(S), alu_op=0000(ADD), inst_kill=0, br_type=000, st_type=variable, ld_type=000, wb_sel=00, wb_en=0, csr_cmd=000, illegal=0"
+      },
+      {
+        "id": "st_lo",
+        "op": "constant",
+        "value": "0x024",
+        "width": 12
+      },
+      {
+        "id": "st_hi_bits",
+        "op": "constant",
+        "value": 0,
+        "width": 10
+      },
+      {
+        "id": "st_zero3",
+        "op": "constant",
+        "value": 0,
+        "width": 3
+      },
+      {
+        "id": "ctrl_store",
+        "op": "concat",
+        "args": [
+          "st_hi_bits",
+          "st_type_val",
+          "st_zero3",
+          "st_lo"
+        ]
+      },
+      {
+        "_comment": "--- ALU Immediate: opcode=0010011 ---"
+      },
+      {
+        "id": "op_alui",
+        "op": "constant",
+        "value": "0b0010011",
+        "width": 7
+      },
+      {
+        "id": "is_alui",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_alui"
+        ]
+      },
+      {
+        "_comment": "ALU op from funct3 for I-type"
+      },
+      {
+        "id": "is_addi",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_000"
+        ]
+      },
+      {
+        "id": "is_slti",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_010"
+        ]
+      },
+      {
+        "id": "f3_011",
+        "op": "constant",
+        "value": 3,
+        "width": 3
+      },
+      {
+        "id": "is_sltiu",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_011"
+        ]
+      },
+      {
+        "id": "is_xori",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_100"
+        ]
+      },
+      {
+        "id": "is_ori",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_110"
+        ]
+      },
+      {
+        "id": "is_andi",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_111"
+        ]
+      },
+      {
+        "id": "is_slli",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_001"
+        ]
+      },
+      {
+        "id": "alu_add_op",
+        "op": "constant",
+        "value": 0,
+        "width": 4
+      },
+      {
+        "id": "alu_slt_op",
+        "op": "constant",
+        "value": 5,
+        "width": 4
+      },
+      {
+        "id": "alu_sltu_op",
+        "op": "constant",
+        "value": 7,
+        "width": 4
+      },
+      {
+        "id": "alu_xor_op",
+        "op": "constant",
+        "value": 4,
+        "width": 4
+      },
+      {
+        "id": "alu_or_op",
+        "op": "constant",
+        "value": 3,
+        "width": 4
+      },
+      {
+        "id": "alu_and_op_v",
+        "op": "constant",
+        "value": 2,
+        "width": 4
+      },
+      {
+        "id": "alu_sll_op",
+        "op": "constant",
+        "value": 6,
+        "width": 4
+      },
+      {
+        "id": "alu_xxx_op",
+        "op": "constant",
+        "value": 15,
+        "width": 4
+      },
+      {
+        "_comment": "Determine shift right type from funct7"
+      },
+      {
+        "id": "f7_0100000",
+        "op": "constant",
+        "value": "0b0100000",
+        "width": 7
+      },
+      {
+        "id": "is_srai_f7",
+        "op": "eq",
+        "args": [
+          "funct7",
+          "f7_0100000"
+        ]
+      },
+      {
+        "id": "alu_srl_op",
+        "op": "constant",
+        "value": 8,
+        "width": 4
+      },
+      {
+        "id": "alu_sra_op",
+        "op": "constant",
+        "value": 9,
+        "width": 4
+      },
+      {
+        "id": "is_srxi",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_101"
+        ]
+      },
+      {
+        "id": "sr_op",
+        "op": "mux",
+        "args": [
+          "is_srai_f7",
+          "alu_srl_op",
+          "alu_sra_op"
+        ]
+      },
+      {
+        "id": "ai0",
+        "op": "mux",
+        "args": [
+          "is_srxi",
+          "alu_xxx_op",
+          "sr_op"
+        ]
+      },
+      {
+        "id": "ai1",
+        "op": "mux",
+        "args": [
+          "is_slli",
+          "ai0",
+          "alu_sll_op"
+        ]
+      },
+      {
+        "id": "ai2",
+        "op": "mux",
+        "args": [
+          "is_andi",
+          "ai1",
+          "alu_and_op_v"
+        ]
+      },
+      {
+        "id": "ai3",
+        "op": "mux",
+        "args": [
+          "is_ori",
+          "ai2",
+          "alu_or_op"
+        ]
+      },
+      {
+        "id": "ai4",
+        "op": "mux",
+        "args": [
+          "is_xori",
+          "ai3",
+          "alu_xor_op"
+        ]
+      },
+      {
+        "id": "ai5",
+        "op": "mux",
+        "args": [
+          "is_sltiu",
+          "ai4",
+          "alu_sltu_op"
+        ]
+      },
+      {
+        "id": "ai6",
+        "op": "mux",
+        "args": [
+          "is_slti",
+          "ai5",
+          "alu_slt_op"
+        ]
+      },
+      {
+        "id": "alui_alu_op",
+        "op": "mux",
+        "args": [
+          "is_addi",
+          "ai6",
+          "alu_add_op"
+        ]
+      },
+      {
+        "_comment": "ALUI ctrl: pc_sel=00, A_sel=1(RS1), B_sel=0(IMM), imm_sel=001(I), alu_op=variable, inst_kill=0, br_type=000, st_type=00, ld_type=000, wb_sel=00(ALU), wb_en=1, csr_cmd=000, illegal=0"
+      },
+      {
+        "id": "alui_lo",
+        "op": "constant",
+        "value": "0x14",
+        "width": 7
+      },
+      {
+        "id": "alui_hi",
+        "op": "constant",
+        "value": "0x800",
+        "width": 16
+      },
+      {
+        "id": "ctrl_alui",
+        "op": "concat",
+        "args": [
+          "alui_hi",
+          "alui_alu_op",
+          "alui_lo"
+        ]
+      },
+      {
+        "_comment": "--- ALU Register: opcode=0110011 ---"
+      },
+      {
+        "id": "op_alur",
+        "op": "constant",
+        "value": "0b0110011",
+        "width": 7
+      },
+      {
+        "id": "is_alur",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_alur"
+        ]
+      },
+      {
+        "id": "is_sub_f7",
+        "op": "eq",
+        "args": [
+          "funct7",
+          "f7_0100000"
+        ]
+      },
+      {
+        "id": "is_add_f3",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_000"
+        ]
+      },
+      {
+        "id": "alu_sub_op",
+        "op": "constant",
+        "value": 1,
+        "width": 4
+      },
+      {
+        "id": "add_or_sub",
+        "op": "mux",
+        "args": [
+          "is_sub_f7",
+          "alu_add_op",
+          "alu_sub_op"
+        ]
+      },
+      {
+        "id": "is_sll_f3",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_001"
+        ]
+      },
+      {
+        "id": "is_slt_f3",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_010"
+        ]
+      },
+      {
+        "id": "is_sltu_f3",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_011"
+        ]
+      },
+      {
+        "id": "is_xor_f3",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_100"
+        ]
+      },
+      {
+        "id": "is_sr_f3",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_101"
+        ]
+      },
+      {
+        "id": "is_or_f3",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_110"
+        ]
+      },
+      {
+        "id": "is_and_f3",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_111"
+        ]
+      },
+      {
+        "id": "sr_op_r",
+        "op": "mux",
+        "args": [
+          "is_sub_f7",
+          "alu_srl_op",
+          "alu_sra_op"
+        ]
+      },
+      {
+        "id": "ar0",
+        "op": "mux",
+        "args": [
+          "is_and_f3",
+          "alu_xxx_op",
+          "alu_and_op_v"
+        ]
+      },
+      {
+        "id": "ar1",
+        "op": "mux",
+        "args": [
+          "is_or_f3",
+          "ar0",
+          "alu_or_op"
+        ]
+      },
+      {
+        "id": "ar2",
+        "op": "mux",
+        "args": [
+          "is_sr_f3",
+          "ar1",
+          "sr_op_r"
+        ]
+      },
+      {
+        "id": "ar3",
+        "op": "mux",
+        "args": [
+          "is_xor_f3",
+          "ar2",
+          "alu_xor_op"
+        ]
+      },
+      {
+        "id": "ar4",
+        "op": "mux",
+        "args": [
+          "is_sltu_f3",
+          "ar3",
+          "alu_sltu_op"
+        ]
+      },
+      {
+        "id": "ar5",
+        "op": "mux",
+        "args": [
+          "is_slt_f3",
+          "ar4",
+          "alu_slt_op"
+        ]
+      },
+      {
+        "id": "ar6",
+        "op": "mux",
+        "args": [
+          "is_sll_f3",
+          "ar5",
+          "alu_sll_op"
+        ]
+      },
+      {
+        "id": "alur_alu_op",
+        "op": "mux",
+        "args": [
+          "is_add_f3",
+          "ar6",
+          "add_or_sub"
+        ]
+      },
+      {
+        "_comment": "ALUR ctrl: pc_sel=00, A_sel=1(RS1), B_sel=1(RS2), imm_sel=000(X), alu_op=variable, inst_kill=0, br_type=000, st_type=00, ld_type=000, wb_sel=00(ALU), wb_en=1, csr_cmd=000, illegal=0"
+      },
+      {
+        "id": "alur_lo",
+        "op": "constant",
+        "value": "0x0c",
+        "width": 7
+      },
+      {
+        "id": "alur_hi",
+        "op": "constant",
+        "value": "0x800",
+        "width": 16
+      },
+      {
+        "id": "ctrl_alur",
+        "op": "concat",
+        "args": [
+          "alur_hi",
+          "alur_alu_op",
+          "alur_lo"
+        ]
+      },
+      {
+        "_comment": "--- FENCE: opcode=0001111 ---"
+      },
+      {
+        "id": "op_fence",
+        "op": "constant",
+        "value": "0b0001111",
+        "width": 7
+      },
+      {
+        "id": "is_fence_op",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_fence"
+        ]
+      },
+      {
+        "id": "ctrl_fence",
+        "op": "constant",
+        "value": 0,
+        "width": 27
+      },
+      {
+        "_comment": "--- SYSTEM: opcode=1110011 ---"
+      },
+      {
+        "id": "op_system",
+        "op": "constant",
+        "value": "0b1110011",
+        "width": 7
+      },
+      {
+        "id": "is_system",
+        "op": "eq",
+        "args": [
+          "opcode",
+          "op_system"
+        ]
+      },
+      {
+        "_comment": "CSR instructions: funct3 determines cmd"
+      },
+      {
+        "id": "is_csrrw",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_001"
+        ]
+      },
+      {
+        "id": "is_csrrs",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_010"
+        ]
+      },
+      {
+        "id": "is_csrrc",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_011"
+        ]
+      },
+      {
+        "id": "is_csrrwi",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_101"
+        ]
+      },
+      {
+        "id": "is_csrrsi",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_110"
+        ]
+      },
+      {
+        "id": "is_csrrci",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_111"
+        ]
+      },
+      {
+        "id": "is_priv",
+        "op": "eq",
+        "args": [
+          "funct3",
+          "f3_000"
+        ]
+      },
+      {
+        "_comment": "CSR ctrl: pc_sel=10(PC_0), A_sel=1(RS1), B_sel=0, imm_sel=000(X), alu_op=1010(COPY_A), inst_kill=1, br_type=000, st_type=00, ld_type=000, wb_sel=11(CSR), wb_en=1, csr_cmd=W/S/C, illegal=0"
+      },
+      {
+        "id": "csr_w",
+        "op": "constant",
+        "value": 1,
+        "width": 3
+      },
+      {
+        "id": "csr_s",
+        "op": "constant",
+        "value": 2,
+        "width": 3
+      },
+      {
+        "id": "csr_c",
+        "op": "constant",
+        "value": 3,
+        "width": 3
+      },
+      {
+        "id": "csr_p",
+        "op": "constant",
+        "value": 4,
+        "width": 3
+      },
+      {
+        "id": "csr_n",
+        "op": "constant",
+        "value": 0,
+        "width": 3
+      },
+      {
+        "_comment": "CSRRW: {0, CSR_W=001, 1, 11, 000, 00, 000, 1, 1010, 000, 0, 1, 10}"
+      },
+      {
+        "id": "ctrl_csrrw",
+        "op": "constant",
+        "value": "0xf00d06",
+        "width": 27
+      },
+      {
+        "_comment": "CSRRS: {0, CSR_S=010, 1, 11, 000, 00, 000, 1, 1010, 000, 0, 1, 10}"
+      },
+      {
+        "id": "ctrl_csrrs",
+        "op": "constant",
+        "value": "0x1700d06",
+        "width": 27
+      },
+      {
+        "_comment": "CSRRC: {0, CSR_C=011, 1, 11, 000, 00, 000, 1, 1010, 000, 0, 1, 10}"
+      },
+      {
+        "id": "ctrl_csrrc",
+        "op": "constant",
+        "value": "0x1f00d06",
+        "width": 27
+      },
+      {
+        "_comment": "CSRRWI: {0, CSR_W=001, 1, 11, 000, 00, 000, 1, 0000, 110(Z), 0, 0, 10}"
+      },
+      {
+        "id": "ctrl_csrrwi",
+        "op": "constant",
+        "value": "0xf00d66",
+        "width": 27
+      },
+      {
+        "_comment": "CSRRSI: {0, CSR_S=010, 1, 11, 000, 00, 000, 1, 0000, 110(Z), 0, 0, 10}"
+      },
+      {
+        "id": "ctrl_csrrsi",
+        "op": "constant",
+        "value": "0x1700d66",
+        "width": 27
+      },
+      {
+        "_comment": "CSRRCI: {0, CSR_C=011, 1, 11, 000, 00, 000, 1, 0000, 110(Z), 0, 0, 10}"
+      },
+      {
+        "id": "ctrl_csrrci",
+        "op": "constant",
+        "value": "0x1f00d66",
+        "width": 27
+      },
+      {
+        "_comment": "Privilege: ECALL/EBREAK/ERET/WFI"
+      },
+      {
+        "id": "insn_20_val",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 20,
+        "width": 12
+      },
+      {
+        "id": "ecall_imm",
+        "op": "constant",
+        "value": 0,
+        "width": 12
+      },
+      {
+        "id": "ebreak_imm",
+        "op": "constant",
+        "value": 1,
+        "width": 12
+      },
+      {
+        "id": "eret_imm",
+        "op": "constant",
+        "value": "0x100",
+        "width": 12
+      },
+      {
+        "id": "is_ecall",
+        "op": "eq",
+        "args": [
+          "insn_20_val",
+          "ecall_imm"
+        ]
+      },
+      {
+        "id": "is_ebreak",
+        "op": "eq",
+        "args": [
+          "insn_20_val",
+          "ebreak_imm"
+        ]
+      },
+      {
+        "id": "is_eret",
+        "op": "eq",
+        "args": [
+          "insn_20_val",
+          "eret_imm"
+        ]
+      },
+      {
+        "_comment": "ECALL/EBREAK: pc_sel=00, csr_cmd=P(100), wb_sel=11(CSR)"
+      },
+      {
+        "id": "ctrl_ecall",
+        "op": "constant",
+        "value": "0x2300d07",
+        "width": 27
+      },
+      {
+        "_comment": "ERET: pc_sel=11(EPC), inst_kill=1, csr_cmd=P(100), wb_sel=11(CSR)"
+      },
+      {
+        "id": "ctrl_eret",
+        "op": "constant",
+        "value": "0x2300d07",
+        "width": 27
+      },
+      {
+        "_comment": "WFI: all zero (nop)"
+      },
+      {
+        "id": "ctrl_wfi",
+        "op": "constant",
+        "value": 0,
+        "width": 27
+      },
+      {
+        "id": "priv0",
+        "op": "mux",
+        "args": [
+          "is_eret",
+          "ctrl_ecall",
+          "ctrl_eret"
+        ]
+      },
+      {
+        "id": "priv_ctrl",
+        "op": "mux",
+        "args": [
+          "is_ecall",
+          "ctrl_wfi",
+          "priv0"
+        ]
+      },
+      {
+        "id": "priv_or_ecall",
+        "op": "mux",
+        "args": [
+          "is_ebreak",
+          "priv_ctrl",
+          "ctrl_ecall"
+        ]
+      },
+      {
+        "_comment": "System mux: CSR instructions vs privilege"
+      },
+      {
+        "id": "sys0",
+        "op": "mux",
+        "args": [
+          "is_csrrci",
+          "priv_or_ecall",
+          "ctrl_csrrci"
+        ]
+      },
+      {
+        "id": "sys1",
+        "op": "mux",
+        "args": [
+          "is_csrrsi",
+          "sys0",
+          "ctrl_csrrsi"
+        ]
+      },
+      {
+        "id": "sys2",
+        "op": "mux",
+        "args": [
+          "is_csrrwi",
+          "sys1",
+          "ctrl_csrrwi"
+        ]
+      },
+      {
+        "id": "sys3",
+        "op": "mux",
+        "args": [
+          "is_csrrc",
+          "sys2",
+          "ctrl_csrrc"
+        ]
+      },
+      {
+        "id": "sys4",
+        "op": "mux",
+        "args": [
+          "is_csrrs",
+          "sys3",
+          "ctrl_csrrs"
+        ]
+      },
+      {
+        "id": "ctrl_system",
+        "op": "mux",
+        "args": [
+          "is_csrrw",
+          "sys4",
+          "ctrl_csrrw"
+        ]
+      },
+      {
+        "_comment": "--- Final mux chain: priority decode ---"
+      },
+      {
+        "id": "c0",
+        "op": "mux",
+        "args": [
+          "is_system",
+          "default_ctrl",
+          "ctrl_system"
+        ]
+      },
+      {
+        "id": "c1",
+        "op": "mux",
+        "args": [
+          "is_fence_op",
+          "c0",
+          "ctrl_fence"
+        ]
+      },
+      {
+        "id": "c2",
+        "op": "mux",
+        "args": [
+          "is_alur",
+          "c1",
+          "ctrl_alur"
+        ]
+      },
+      {
+        "id": "c3",
+        "op": "mux",
+        "args": [
+          "is_alui",
+          "c2",
+          "ctrl_alui"
+        ]
+      },
+      {
+        "id": "c4",
+        "op": "mux",
+        "args": [
+          "is_store",
+          "c3",
+          "ctrl_store"
+        ]
+      },
+      {
+        "id": "c5",
+        "op": "mux",
+        "args": [
+          "is_load",
+          "c4",
+          "ctrl_load"
+        ]
+      },
+      {
+        "id": "c6",
+        "op": "mux",
+        "args": [
+          "is_branch",
+          "c5",
+          "ctrl_br"
+        ]
+      },
+      {
+        "id": "c7",
+        "op": "mux",
+        "args": [
+          "is_jalr",
+          "c6",
+          "ctrl_jalr"
+        ]
+      },
+      {
+        "id": "c8",
+        "op": "mux",
+        "args": [
+          "is_jal",
+          "c7",
+          "ctrl_jal"
+        ]
+      },
+      {
+        "id": "c9",
+        "op": "mux",
+        "args": [
+          "is_auipc",
+          "c8",
+          "ctrl_auipc"
+        ]
+      },
+      {
+        "id": "final_ctrl",
+        "op": "mux",
+        "args": [
+          "is_lui",
+          "c9",
+          "ctrl_lui"
+        ]
+      },
+      {
+        "op": "output",
+        "args": {
+          "ctrl_sig": "final_ctrl"
+        }
+      }
+    ]
+  },
+  {
+    "name": "Regfile",
+    "ports": {
+      "clk": {
+        "dir": "input",
+        "width": 1
+      },
+      "rst": {
+        "dir": "input",
+        "width": 1
+      },
+      "rs1_addr": {
+        "dir": "input",
+        "width": 5
+      },
+      "rs2_addr": {
+        "dir": "input",
+        "width": 5
+      },
+      "rd_addr": {
+        "dir": "input",
+        "width": 5
+      },
+      "rd_data": {
+        "dir": "input",
+        "width": 32
+      },
+      "rd_en": {
+        "dir": "input",
+        "width": 1
+      },
+      "rs1_data": {
+        "dir": "output",
+        "width": 32
+      },
+      "rs2_data": {
+        "dir": "output",
+        "width": 32
+      }
+    },
+    "body": [
+      {
+        "_comment": "=== Register file: 32x32-bit with x0 hardwired to 0 ==="
+      },
+      {
+        "id": "const_1",
+        "op": "constant",
+        "value": 1,
+        "width": 1
+      },
+      {
+        "id": "zero32",
+        "op": "constant",
+        "value": 0,
+        "width": 32
+      },
+      {
+        "id": "zero5",
+        "op": "constant",
+        "value": 0,
+        "width": 5
+      },
+      {
+        "id": ["rs1_raw", "rs2_raw"],
+        "op": "mem",
+        "width": 32,
+        "depth": 32,
+        "clock": "clk",
+        "reset": "rst",
+        "reads": [
+          {"addr": "rs1_addr", "enable": "const_1"},
+          {"addr": "rs2_addr", "enable": "const_1"}
+        ],
+        "writes": [
+          {"addr": "rd_addr", "data": "rd_data", "enable": "rd_en"}
+        ]
+      },
+      {
+        "_comment": "--- Hardwire x0 = 0: if addr == 0, return 0 ---"
+      },
+      {
+        "id": "rs1_is_x0",
+        "op": "eq",
+        "args": ["rs1_addr", "zero5"]
+      },
+      {
+        "id": "rs2_is_x0",
+        "op": "eq",
+        "args": ["rs2_addr", "zero5"]
+      },
+      {
+        "id": "rs1_out",
+        "op": "mux",
+        "args": ["rs1_is_x0", "zero32", "rs1_raw"]
+      },
+      {
+        "id": "rs2_out",
+        "op": "mux",
+        "args": ["rs2_is_x0", "zero32", "rs2_raw"]
+      },
+      {
+        "op": "output",
+        "args": {
+          "rs1_data": "rs1_out",
+          "rs2_data": "rs2_out"
+        }
+      }
+    ]
+  },
+  {
+    "name": "CSRGen",
+    "ports": {
+      "clk": {
+        "dir": "input",
+        "width": 1
+      },
+      "rst": {
+        "dir": "input",
+        "width": 1
+      },
+      "stall": {
+        "dir": "input",
+        "width": 1
+      },
+      "cmd": {
+        "dir": "input",
+        "width": 3
+      },
+      "csr_in": {
+        "dir": "input",
+        "width": 32
+      },
+      "csr_out": {
+        "dir": "output",
+        "width": 32
+      },
+      "pc": {
+        "dir": "input",
+        "width": 32
+      },
+      "addr": {
+        "dir": "input",
+        "width": 32
+      },
+      "insn": {
+        "dir": "input",
+        "width": 32
+      },
+      "illegal": {
+        "dir": "input",
+        "width": 1
+      },
+      "st_type": {
+        "dir": "input",
+        "width": 2
+      },
+      "ld_type": {
+        "dir": "input",
+        "width": 3
+      },
+      "pc_check": {
+        "dir": "input",
+        "width": 1
+      },
+      "expt": {
+        "dir": "output",
+        "width": 1
+      },
+      "evec": {
+        "dir": "output",
+        "width": 32
+      },
+      "epc": {
+        "dir": "output",
+        "width": 32
+      }
+    },
+    "body": [
+      {
+        "_comment": "=== CSR Generator: Simplified implementation ==="
+      },
+      {
+        "_comment": "--- Constants ---"
+      },
+      {
+        "id": "zero32",
+        "op": "constant",
+        "value": 0,
+        "width": 32
+      },
+      {
+        "id": "one32",
+        "op": "constant",
+        "value": 1,
+        "width": 32
+      },
+      {
+        "_comment": "--- CSR address extraction ---"
+      },
+      {
+        "id": "csr_addr",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 20,
+        "width": 12
+      },
+      {
+        "id": "rs1_addr_csr",
+        "op": "extract",
+        "args": [
+          "insn"
+        ],
+        "lowBit": 15,
+        "width": 5
+      },
+      {
+        "_comment": "--- CSR command constants ---"
+      },
+      {
+        "id": "cmd_n",
+        "op": "constant",
+        "value": 0,
+        "width": 3
+      },
+      {
+        "id": "cmd_w",
+        "op": "constant",
+        "value": 1,
+        "width": 3
+      },
+      {
+        "id": "cmd_s",
+        "op": "constant",
+        "value": 2,
+        "width": 3
+      },
+      {
+        "id": "cmd_c",
+        "op": "constant",
+        "value": 3,
+        "width": 3
+      },
+      {
+        "id": "cmd_p",
+        "op": "constant",
+        "value": 4,
+        "width": 3
+      },
+      {
+        "_comment": "--- Exception detection (pure combinational from inputs) ---"
+      },
+      {
+        "id": "addr_bit1",
+        "op": "extract",
+        "args": [
+          "addr"
+        ],
+        "lowBit": 1,
+        "width": 1
+      },
+      {
+        "id": "iaddr_invalid",
+        "op": "and",
+        "args": [
+          "pc_check",
+          "addr_bit1"
+        ]
+      },
+      {
+        "id": "is_priv_cmd",
+        "op": "eq",
+        "args": [
+          "cmd",
+          "cmd_p"
+        ]
+      },
+      {
+        "id": "csr_addr_bit0",
+        "op": "extract",
+        "args": [
+          "csr_addr"
+        ],
+        "lowBit": 0,
+        "width": 1
+      },
+      {
+        "id": "csr_addr_bit8",
+        "op": "extract",
+        "args": [
+          "csr_addr"
+        ],
+        "lowBit": 8,
+        "width": 1
+      },
+      {
+        "id": "not_bit0",
+        "op": "not",
+        "args": [
+          "csr_addr_bit0"
+        ]
+      },
+      {
+        "id": "not_bit8",
+        "op": "not",
+        "args": [
+          "csr_addr_bit8"
+        ]
+      },
+      {
+        "id": "is_ecall_cond",
+        "op": "and",
+        "args": [
+          "is_priv_cmd",
+          "not_bit0"
+        ]
+      },
+      {
+        "id": "is_ecall",
+        "op": "and",
+        "args": [
+          "is_ecall_cond",
+          "not_bit8"
+        ]
+      },
+      {
+        "id": "is_ebreak_cond",
+        "op": "and",
+        "args": [
+          "is_priv_cmd",
+          "csr_addr_bit0"
+        ]
+      },
+      {
+        "id": "is_ebreak",
+        "op": "and",
+        "args": [
+          "is_ebreak_cond",
+          "not_bit8"
+        ]
+      },
+      {
+        "id": "expt_or1",
+        "op": "or",
+        "args": [
+          "illegal",
+          "iaddr_invalid"
+        ]
+      },
+      {
+        "id": "expt_or2",
+        "op": "or",
+        "args": [
+          "expt_or1",
+          "is_ecall"
+        ]
+      },
+      {
+        "id": "expt_sig",
+        "op": "or",
+        "args": [
+          "expt_or2",
+          "is_ebreak"
+        ]
+      },
+      {
+        "_comment": "--- Registers: mepc stores PC on exception ---"
+      },
+      {
+        "id": "mepc_reg",
+        "op": "reg",
+        "args": [
+          "pc"
+        ],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": 0,
+        "enable": "expt_sig"
+      },
+      {
+        "_comment": "--- mcause and mstatus: simplified to zero ---"
+      },
+      {
+        "id": "mcause_reg",
+        "op": "reg",
+        "args": [
+          "zero32"
+        ],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": 0
+      },
+      {
+        "id": "mstatus_reg",
+        "op": "reg",
+        "args": [
+          "zero32"
+        ],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": 0
+      },
+      {
+        "_comment": "--- CSR read: lookup by address ---"
+      },
+      {
+        "id": "mepc_addr",
+        "op": "constant",
+        "value": "0x341",
+        "width": 12
+      },
+      {
+        "id": "mcause_addr",
+        "op": "constant",
+        "value": "0x342",
+        "width": 12
+      },
+      {
+        "id": "mstatus_addr",
+        "op": "constant",
+        "value": "0x300",
+        "width": 12
+      },
+      {
+        "id": "is_mepc",
+        "op": "eq",
+        "args": [
+          "csr_addr",
+          "mepc_addr"
+        ]
+      },
+      {
+        "id": "is_mcause",
+        "op": "eq",
+        "args": [
+          "csr_addr",
+          "mcause_addr"
+        ]
+      },
+      {
+        "id": "is_mstatus",
+        "op": "eq",
+        "args": [
+          "csr_addr",
+          "mstatus_addr"
+        ]
+      },
+      {
+        "id": "csr_rd0",
+        "op": "mux",
+        "args": [
+          "is_mstatus",
+          "zero32",
+          "mstatus_reg"
+        ]
+      },
+      {
+        "id": "csr_rd1",
+        "op": "mux",
+        "args": [
+          "is_mcause",
+          "csr_rd0",
+          "mcause_reg"
+        ]
+      },
+      {
+        "id": "csr_read",
+        "op": "mux",
+        "args": [
+          "is_mepc",
+          "csr_rd1",
+          "mepc_reg"
+        ]
+      },
+      {
+        "_comment": "--- evec: exception vector (fixed at 0x100) ---"
+      },
+      {
+        "id": "evec_val",
+        "op": "constant",
+        "value": "0x100",
+        "width": 32
+      },
+      {
+        "op": "output",
+        "args": {
+          "csr_out": "csr_read",
+          "expt": "expt_sig",
+          "evec": "evec_val",
+          "epc": "mepc_reg"
+        }
+      }
+    ]
+  },
+  {
+    "name": "Cache",
+    "ports": {
+      "clk": {
+        "dir": "input",
+        "width": 1
+      },
+      "rst": {
+        "dir": "input",
+        "width": 1
+      },
+      "req_addr": {
+        "dir": "input",
+        "width": 32
+      },
+      "req_data": {
+        "dir": "input",
+        "width": 32
+      },
+      "req_mask": {
+        "dir": "input",
+        "width": 4
+      },
+      "req_abort": {
+        "dir": "input",
+        "width": 1
+      },
+      "req_valid": {
+        "dir": "input",
+        "width": 1
+      },
+      "resp_data": {
+        "dir": "output",
+        "width": 32
+      },
+      "resp_valid": {
+        "dir": "output",
+        "width": 1
+      }
+    },
+    "body": [
+      {
+        "_comment": "=== Cache: 256x32-bit register-array memory (1 KB) ==="
+      },
+      {
+        "_comment": "--- Extract word-aligned address bits [2:10) for 256-entry indexing ---"
+      },
+      {
+        "id": "word_addr",
+        "op": "extract",
+        "args": ["req_addr"],
+        "lowBit": 2,
+        "width": 8
+      },
+      {
+        "_comment": "--- Read enable = req_valid & ~req_abort ---"
+      },
+      {
+        "id": "abort_n",
+        "op": "not",
+        "args": ["req_abort"]
+      },
+      {
+        "id": "req_active",
+        "op": "and",
+        "args": ["req_valid", "abort_n"]
+      },
+      {
+        "_comment": "--- Write enable = req_active & or_reduce(req_mask) ---"
+      },
+      {
+        "id": "has_wmask",
+        "op": "or_reduce",
+        "args": ["req_mask"]
+      },
+      {
+        "id": "wen",
+        "op": "and",
+        "args": ["req_active", "has_wmask"]
+      },
+      {
+        "id": ["cache_rd"],
+        "op": "mem",
+        "width": 32,
+        "depth": 256,
+        "clock": "clk",
+        "reset": "rst",
+        "reads": [
+          {"addr": "word_addr", "enable": "req_active"}
+        ],
+        "writes": [
+          {"addr": "word_addr", "data": "req_data", "enable": "wen"}
+        ]
+      },
+      {
+        "_comment": "--- resp_valid = registered version of read enable ---"
+      },
+      {
+        "id": "valid_reg",
+        "op": "reg",
+        "args": ["req_active"],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": 0
+      },
+      {
+        "op": "output",
+        "args": {
+          "resp_data": "cache_rd",
+          "resp_valid": "valid_reg"
+        }
+      }
+    ]
+  },
+  {
+    "name": "Datapath",
+    "ports": {
+      "clk": {
+        "dir": "input",
+        "width": 1
+      },
+      "rst": {
+        "dir": "input",
+        "width": 1
+      },
+      "ctrl_sig": {
+        "dir": "input",
+        "width": 27
+      },
+      "insn_out": {
+        "dir": "output",
+        "width": 32
+      },
+      "dreq_addr": {
+        "dir": "output",
+        "width": 32
+      },
+      "dreq_data": {
+        "dir": "output",
+        "width": 32
+      },
+      "dreq_mask": {
+        "dir": "output",
+        "width": 4
+      },
+      "dreq_abort": {
+        "dir": "output",
+        "width": 1
+      },
+      "dresp_data": {
+        "dir": "input",
+        "width": 32
+      },
+      "dresp_valid": {
+        "dir": "input",
+        "width": 1
+      },
+      "ireq_addr": {
+        "dir": "output",
+        "width": 32
+      },
+      "ireq_data": {
+        "dir": "output",
+        "width": 32
+      },
+      "ireq_mask": {
+        "dir": "output",
+        "width": 4
+      },
+      "ireq_abort": {
+        "dir": "output",
+        "width": 1
+      },
+      "iresp_data": {
+        "dir": "input",
+        "width": 32
+      },
+      "iresp_valid": {
+        "dir": "input",
+        "width": 1
+      }
+    },
+    "body": [
+      {
+        "_comment": "=== Datapath: Pipeline stages ==="
+      },
+      {
+        "_comment": "--- Extract control signals ---"
+      },
+      {
+        "id": "pc_sel",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 0,
+        "width": 2
+      },
+      {
+        "id": "A_sel",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 2,
+        "width": 1
+      },
+      {
+        "id": "B_sel",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 3,
+        "width": 1
+      },
+      {
+        "id": "imm_sel",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 4,
+        "width": 3
+      },
+      {
+        "id": "alu_op",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 7,
+        "width": 4
+      },
+      {
+        "id": "inst_kill",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 11,
+        "width": 1
+      },
+      {
+        "id": "br_type",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 12,
+        "width": 3
+      },
+      {
+        "id": "st_type",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 15,
+        "width": 2
+      },
+      {
+        "id": "ld_type",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 17,
+        "width": 3
+      },
+      {
+        "id": "wb_sel",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 20,
+        "width": 2
+      },
+      {
+        "id": "wb_en",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 22,
+        "width": 1
+      },
+      {
+        "id": "csr_cmd",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 23,
+        "width": 3
+      },
+      {
+        "id": "illegal_bit",
+        "op": "extract",
+        "args": [
+          "ctrl_sig"
+        ],
+        "lowBit": 26,
+        "width": 1
+      },
+      {
+        "_comment": "--- Constants ---"
+      },
+      {
+        "id": "zero32",
+        "op": "constant",
+        "value": 0,
+        "width": 32
+      },
+      {
+        "id": "four32",
+        "op": "constant",
+        "value": 4,
+        "width": 32
+      },
+      {
+        "id": "zero1",
+        "op": "constant",
+        "value": 0,
+        "width": 1
+      },
+      {
+        "id": "one1",
+        "op": "constant",
+        "value": 1,
+        "width": 1
+      },
+      {
+        "id": "zero4",
+        "op": "constant",
+        "value": 0,
+        "width": 4
+      },
+      {
+        "id": "nop_insn",
+        "op": "constant",
+        "value": "0x00000013",
+        "width": 32
+      },
+      {
+        "_comment": "--- Stall detection ---"
+      },
+      {
+        "id": "not_iresp_valid",
+        "op": "not",
+        "args": [
+          "iresp_valid"
+        ]
+      },
+      {
+        "id": "not_dresp_valid",
+        "op": "not",
+        "args": [
+          "dresp_valid"
+        ]
+      },
+      {
+        "id": "stall",
+        "op": "or",
+        "args": [
+          "not_iresp_valid",
+          "not_dresp_valid"
+        ]
+      },
+      {
+        "_comment": "=== Pipeline registers (outputs available immediately) ==="
+      },
+      {
+        "id": "pc_reg",
+        "op": "reg",
+        "args": [
+          "npc"
+        ],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": "0x1fc",
+        "width": 32
+      },
+      {
+        "id": "fe_pc",
+        "op": "reg",
+        "args": [
+          "fe_pc_in"
+        ],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": 0,
+        "width": 32
+      },
+      {
+        "id": "fe_inst",
+        "op": "reg",
+        "args": [
+          "fe_inst_in"
+        ],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": "0x00000013",
+        "width": 32
+      },
+      {
+        "id": "ew_inst",
+        "op": "reg",
+        "args": [
+          "ew_inst_in"
+        ],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": "0x00000013",
+        "width": 32
+      },
+      {
+        "id": "ew_pc",
+        "op": "reg",
+        "args": [
+          "ew_pc_in"
+        ],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": 0,
+        "width": 32
+      },
+      {
+        "id": "ctrl_sig_reg",
+        "op": "reg",
+        "args": [
+          "ctrl_sig"
+        ],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": 0,
+        "width": 27
+      },
+      {
+        "id": "ew_alu_val",
+        "op": "reg",
+        "args": [
+          "alu_result"
+        ],
+        "clock": "clk",
+        "reset": "rst",
+        "resetValue": 0,
+        "width": 32
+      },
+      {
+        "_comment": "--- PC computation ---"
+      },
+      {
+        "id": "pc_plus4",
+        "op": "add",
+        "args": [
+          "pc_reg",
+          "four32"
+        ]
+      },
+      {
+        "_comment": "--- Pipeline ctrl register extracts ---"
+      },
+      {
+        "id": "wb_sel_pipe",
+        "op": "extract",
+        "args": [
+          "ctrl_sig_reg"
+        ],
+        "lowBit": 20,
+        "width": 2
+      },
+      {
+        "id": "wb_en_pipe",
+        "op": "extract",
+        "args": [
+          "ctrl_sig_reg"
+        ],
+        "lowBit": 22,
+        "width": 1
+      },
+      {
+        "id": "csr_cmd_pipe",
+        "op": "extract",
+        "args": [
+          "ctrl_sig_reg"
+        ],
+        "lowBit": 23,
+        "width": 3
+      },
+      {
+        "id": "ld_type_pipe",
+        "op": "extract",
+        "args": [
+          "ctrl_sig_reg"
+        ],
+        "lowBit": 17,
+        "width": 3
+      },
+      {
+        "id": "st_type_pipe",
+        "op": "extract",
+        "args": [
+          "ctrl_sig_reg"
+        ],
+        "lowBit": 15,
+        "width": 2
+      },
+      {
+        "id": "illegal_pipe",
+        "op": "extract",
+        "args": [
+          "ctrl_sig_reg"
+        ],
+        "lowBit": 26,
+        "width": 1
+      },
+      {
+        "_comment": "--- Instruction field extraction ---"
+      },
+      {
+        "id": "rs1_addr",
+        "op": "extract",
+        "args": [
+          "fe_inst"
+        ],
+        "lowBit": 15,
+        "width": 5
+      },
+      {
+        "id": "rs2_addr",
+        "op": "extract",
+        "args": [
+          "fe_inst"
+        ],
+        "lowBit": 20,
+        "width": 5
+      },
+      {
+        "id": "rd_addr",
+        "op": "extract",
+        "args": [
+          "fe_inst"
+        ],
+        "lowBit": 7,
+        "width": 5
+      },
+      {
+        "id": "wb_rd_addr_pipe",
+        "op": "extract",
+        "args": [
+          "ew_inst"
+        ],
+        "lowBit": 7,
+        "width": 5
+      },
+      {
+        "_comment": "--- Regfile (simplified: returns 0) ---"
+      },
+      {
+        "id": "rs1_data",
+        "op": "constant",
+        "value": 0,
+        "width": 32
+      },
+      {
+        "id": "rs2_data",
+        "op": "constant",
+        "value": 0,
+        "width": 32
+      },
+      {
+        "_comment": "--- Immediate generation ---"
+      },
+      {
+        "id": [
+          "imm_out"
+        ],
+        "op": "instance",
+        "module": "Immgen",
+        "args": {
+          "insn": "fe_inst",
+          "sel": "imm_sel"
+        }
+      },
+      {
+        "_comment": "--- Bypass/Forwarding ---"
+      },
+      {
+        "id": "rs1_nz",
+        "op": "or_reduce",
+        "args": [
+          "rs1_addr"
+        ]
+      },
+      {
+        "id": "rs1_match",
+        "op": "eq",
+        "args": [
+          "rs1_addr",
+          "wb_rd_addr_pipe"
+        ]
+      },
+      {
+        "id": "rs1_hazard_pre",
+        "op": "and",
+        "args": [
+          "wb_en_pipe",
+          "rs1_nz"
+        ]
+      },
+      {
+        "id": "rs1_hazard",
+        "op": "and",
+        "args": [
+          "rs1_hazard_pre",
+          "rs1_match"
+        ]
+      },
+      {
+        "id": "rs2_nz",
+        "op": "or_reduce",
+        "args": [
+          "rs2_addr"
+        ]
+      },
+      {
+        "id": "rs2_match",
+        "op": "eq",
+        "args": [
+          "rs2_addr",
+          "wb_rd_addr_pipe"
+        ]
+      },
+      {
+        "id": "rs2_hazard_pre",
+        "op": "and",
+        "args": [
+          "wb_en_pipe",
+          "rs2_nz"
+        ]
+      },
+      {
+        "id": "rs2_hazard",
+        "op": "and",
+        "args": [
+          "rs2_hazard_pre",
+          "rs2_match"
+        ]
+      },
+      {
+        "id": "wb_alu_sel",
+        "op": "constant",
+        "value": 0,
+        "width": 2
+      },
+      {
+        "id": "wb_is_alu",
+        "op": "eq",
+        "args": [
+          "wb_sel_pipe",
+          "wb_alu_sel"
+        ]
+      },
+      {
+        "id": "fwd_rs1_cond",
+        "op": "and",
+        "args": [
+          "wb_is_alu",
+          "rs1_hazard"
+        ]
+      },
+      {
+        "id": "fwd_rs2_cond",
+        "op": "and",
+        "args": [
+          "wb_is_alu",
+          "rs2_hazard"
+        ]
+      },
+      {
+        "id": "rs1_fwd",
+        "op": "mux",
+        "args": [
+          "fwd_rs1_cond",
+          "rs1_data",
+          "ew_alu_val"
+        ]
+      },
+      {
+        "id": "rs2_fwd",
+        "op": "mux",
+        "args": [
+          "fwd_rs2_cond",
+          "rs2_data",
+          "ew_alu_val"
+        ]
+      },
+      {
+        "_comment": "--- ALU input selection ---"
+      },
+      {
+        "id": "alu_A",
+        "op": "mux",
+        "args": [
+          "A_sel",
+          "fe_pc",
+          "rs1_fwd"
+        ]
+      },
+      {
+        "id": "alu_B",
+        "op": "mux",
+        "args": [
+          "B_sel",
+          "imm_out",
+          "rs2_fwd"
+        ]
+      },
+      {
+        "_comment": "--- ALU ---"
+      },
+      {
+        "id": [
+          "alu_result",
+          "alu_sum_val"
+        ],
+        "op": "instance",
+        "module": "ALU",
+        "args": {
+          "A": "alu_A",
+          "B": "alu_B",
+          "alu_op": "alu_op"
+        }
+      },
+      {
+        "_comment": "--- BRU ---"
+      },
+      {
+        "id": [
+          "bru_taken"
+        ],
+        "op": "instance",
+        "module": "BRU",
+        "args": {
+          "rs1": "rs1_fwd",
+          "rs2": "rs2_fwd",
+          "br_type": "br_type"
+        }
+      },
+      {
+        "_comment": "--- CSR ---"
+      },
+      {
+        "id": "csr_input",
+        "op": "mux",
+        "args": [
+          "B_sel",
+          "rs1_fwd",
+          "imm_out"
+        ]
+      },
+      {
+        "id": "pc_sel_1",
+        "op": "constant",
+        "value": 1,
+        "width": 2
+      },
+      {
+        "id": "is_pc_alu",
+        "op": "eq",
+        "args": [
+          "pc_sel",
+          "pc_sel_1"
+        ]
+      },
+      {
+        "id": [
+          "csr_out_val",
+          "csr_expt",
+          "csr_evec",
+          "csr_epc"
+        ],
+        "op": "instance",
+        "module": "CSRGen",
+        "args": {
+          "clk": "clk",
+          "rst": "rst",
+          "stall": "stall",
+          "cmd": "csr_cmd_pipe",
+          "csr_in": "csr_input",
+          "pc": "ew_pc",
+          "addr": "ew_alu_val",
+          "insn": "ew_inst",
+          "illegal": "illegal_pipe",
+          "st_type": "st_type_pipe",
+          "ld_type": "ld_type_pipe",
+          "pc_check": "is_pc_alu"
+        }
+      },
+      {
+        "_comment": "--- Fetch instruction selection (now bru_taken and csr_expt are defined) ---"
+      },
+      {
+        "id": "kill_or_taken",
+        "op": "or",
+        "args": [
+          "inst_kill",
+          "bru_taken"
+        ]
+      },
+      {
+        "id": "kill_all",
+        "op": "or",
+        "args": [
+          "kill_or_taken",
+          "csr_expt"
+        ]
+      },
+      {
+        "id": "use_nop",
+        "op": "or",
+        "args": [
+          "one1",
+          "kill_all"
+        ]
+      },
+      {
+        "id": "fetched_insn",
+        "op": "mux",
+        "args": [
+          "use_nop",
+          "iresp_data",
+          "nop_insn"
+        ]
+      },
+      {
+        "_comment": "--- Pipeline register next-value computation ---"
+      },
+      {
+        "id": "npc",
+        "op": "mux",
+        "args": [
+          "stall",
+          "pc_plus4",
+          "pc_reg"
+        ]
+      },
+      {
+        "id": "fe_pc_in",
+        "op": "mux",
+        "args": [
+          "stall",
+          "pc_reg",
+          "fe_pc"
+        ]
+      },
+      {
+        "id": "fe_inst_in",
+        "op": "mux",
+        "args": [
+          "stall",
+          "fetched_insn",
+          "fe_inst"
+        ]
+      },
+      {
+        "id": "ew_inst_in",
+        "op": "mux",
+        "args": [
+          "stall",
+          "fe_inst",
+          "ew_inst"
+        ]
+      },
+      {
+        "id": "ew_pc_in",
+        "op": "mux",
+        "args": [
+          "stall",
+          "fe_pc",
+          "ew_pc"
+        ]
+      },
+      {
+        "_comment": "--- Load data ---"
+      },
+      {
+        "id": "load_data",
+        "op": "mux",
+        "args": [
+          "zero1",
+          "dresp_data",
+          "dresp_data"
+        ]
+      },
+      {
+        "_comment": "--- Writeback mux: wb_sel -> {ALU, MEM, PC+4, CSR} ---"
+      },
+      {
+        "id": "ew_pc_plus4",
+        "op": "add",
+        "args": [
+          "ew_pc",
+          "four32"
+        ]
+      },
+      {
+        "id": "wbs0",
+        "op": "extract",
+        "args": [
+          "wb_sel_pipe"
+        ],
+        "lowBit": 0,
+        "width": 1
+      },
+      {
+        "id": "wbs1",
+        "op": "extract",
+        "args": [
+          "wb_sel_pipe"
+        ],
+        "lowBit": 1,
+        "width": 1
+      },
+      {
+        "id": "wb0",
+        "op": "mux",
+        "args": [
+          "wbs0",
+          "ew_alu_val",
+          "load_data"
+        ]
+      },
+      {
+        "id": "wb1",
+        "op": "mux",
+        "args": [
+          "wbs0",
+          "ew_pc_plus4",
+          "csr_out_val"
+        ]
+      },
+      {
+        "id": "reg_wdata",
+        "op": "mux",
+        "args": [
+          "wbs1",
+          "wb0",
+          "wb1"
+        ]
+      },
+      {
+        "_comment": "--- Write enable gating ---"
+      },
+      {
+        "id": "not_stall",
+        "op": "not",
+        "args": [
+          "stall"
+        ]
+      },
+      {
+        "id": "not_expt",
+        "op": "not",
+        "args": [
+          "csr_expt"
+        ]
+      },
+      {
+        "id": "wb_gate1",
+        "op": "and",
+        "args": [
+          "wb_en_pipe",
+          "not_stall"
+        ]
+      },
+      {
+        "id": "wb_en_final",
+        "op": "and",
+        "args": [
+          "wb_gate1",
+          "not_expt"
+        ]
+      },
+      {
+        "_comment": "--- Data request (simplified) ---"
+      },
+      {
+        "id": "dmask",
+        "op": "constant",
+        "value": 15,
+        "width": 4
+      },
+      {
+        "op": "output",
+        "args": {
+          "insn_out": "fe_inst",
+          "dreq_addr": "alu_result",
+          "dreq_data": "rs2_fwd",
+          "dreq_mask": "dmask",
+          "dreq_abort": "csr_expt",
+          "ireq_addr": "npc",
+          "ireq_data": "zero32",
+          "ireq_mask": "zero4",
+          "ireq_abort": "zero1"
+        }
+      }
+    ]
+  },
+  {
+    "name": "Core",
+    "ports": {
+      "clk": {
+        "dir": "input",
+        "width": 1
+      },
+      "rst": {
+        "dir": "input",
+        "width": 1
+      },
+      "dreq_addr": {
+        "dir": "output",
+        "width": 32
+      },
+      "dreq_data": {
+        "dir": "output",
+        "width": 32
+      },
+      "dreq_mask": {
+        "dir": "output",
+        "width": 4
+      },
+      "dreq_abort": {
+        "dir": "output",
+        "width": 1
+      },
+      "dresp_data": {
+        "dir": "input",
+        "width": 32
+      },
+      "dresp_valid": {
+        "dir": "input",
+        "width": 1
+      },
+      "ireq_addr": {
+        "dir": "output",
+        "width": 32
+      },
+      "ireq_data": {
+        "dir": "output",
+        "width": 32
+      },
+      "ireq_mask": {
+        "dir": "output",
+        "width": 4
+      },
+      "ireq_abort": {
+        "dir": "output",
+        "width": 1
+      },
+      "iresp_data": {
+        "dir": "input",
+        "width": 32
+      },
+      "iresp_valid": {
+        "dir": "input",
+        "width": 1
+      }
+    },
+    "body": [
+      {
+        "_comment": "Core: Control + Datapath"
+      },
+      {
+        "id": [
+          "dp_insn",
+          "dp_dreq_addr",
+          "dp_dreq_data",
+          "dp_dreq_mask",
+          "dp_dreq_abort",
+          "dp_ireq_addr",
+          "dp_ireq_data",
+          "dp_ireq_mask",
+          "dp_ireq_abort"
+        ],
+        "op": "instance",
+        "module": "Datapath",
+        "args": {
+          "clk": "clk",
+          "rst": "rst",
+          "ctrl_sig": "ctrl_out",
+          "dresp_data": "dresp_data",
+          "dresp_valid": "dresp_valid",
+          "iresp_data": "iresp_data",
+          "iresp_valid": "iresp_valid"
+        }
+      },
+      {
+        "id": [
+          "ctrl_out"
+        ],
+        "op": "instance",
+        "module": "Control",
+        "args": {
+          "insn": "dp_insn"
+        }
+      },
+      {
+        "op": "output",
+        "args": {
+          "dreq_addr": "dp_dreq_addr",
+          "dreq_data": "dp_dreq_data",
+          "dreq_mask": "dp_dreq_mask",
+          "dreq_abort": "dp_dreq_abort",
+          "ireq_addr": "dp_ireq_addr",
+          "ireq_data": "dp_ireq_data",
+          "ireq_mask": "dp_ireq_mask",
+          "ireq_abort": "dp_ireq_abort"
+        }
+      }
+    ]
+  },
+  {
+    "name": "Tile",
+    "ports": {
+      "clk": {
+        "dir": "input",
+        "width": 1
+      },
+      "rst": {
+        "dir": "input",
+        "width": 1
+      }
+    },
+    "body": [
+      {
+        "_comment": "Tile: Core + 2x Cache (icache + dcache)"
+      },
+      {
+        "id": [
+          "ic_resp_data",
+          "ic_resp_valid"
+        ],
+        "op": "instance",
+        "module": "Cache",
+        "args": {
+          "clk": "clk",
+          "rst": "rst",
+          "req_addr": "core_ireq_addr",
+          "req_data": "core_ireq_data",
+          "req_mask": "core_ireq_mask",
+          "req_abort": "core_ireq_abort",
+          "req_valid": "ic_req_valid"
+        }
+      },
+      {
+        "id": [
+          "dc_resp_data",
+          "dc_resp_valid"
+        ],
+        "op": "instance",
+        "module": "Cache",
+        "args": {
+          "clk": "clk",
+          "rst": "rst",
+          "req_addr": "core_dreq_addr",
+          "req_data": "core_dreq_data",
+          "req_mask": "core_dreq_mask",
+          "req_abort": "core_dreq_abort",
+          "req_valid": "dc_req_valid"
+        }
+      },
+      {
+        "id": "ic_req_valid",
+        "op": "constant",
+        "value": 1,
+        "width": 1
+      },
+      {
+        "id": "dc_req_valid",
+        "op": "constant",
+        "value": 1,
+        "width": 1
+      },
+      {
+        "id": [
+          "core_dreq_addr",
+          "core_dreq_data",
+          "core_dreq_mask",
+          "core_dreq_abort",
+          "core_ireq_addr",
+          "core_ireq_data",
+          "core_ireq_mask",
+          "core_ireq_abort"
+        ],
+        "op": "instance",
+        "module": "Core",
+        "args": {
+          "clk": "clk",
+          "rst": "rst",
+          "dresp_data": "dc_resp_data",
+          "dresp_valid": "dc_resp_valid",
+          "iresp_data": "ic_resp_data",
+          "iresp_valid": "ic_resp_valid"
+        }
+      },
+      {
+        "op": "output",
+        "args": {}
+      }
+    ]
+  }
+]
