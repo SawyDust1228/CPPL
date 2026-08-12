@@ -11,6 +11,7 @@ Python DSL (@module)  →  LLM Compilation  →  JSON-IR  →  MLIR / Verilog
 - **Frontend**: `@module` decorator extracts ports and logic descriptions from Python functions
 - **Compiler**: LLM generates JSON-IR body from natural-language descriptions (with validation feedback loop)
 - **IR**: SSA-based intermediate representation with parsing, validation, and bit-width inference
+- **Interpreter**: pure-Python, two-state functional and cycle simulation of JSON-IR
 - **Codegen**: MLIR/CIRCT emission via pycde, with Verilog export
 
 ## Quick Start
@@ -115,6 +116,28 @@ The intermediate representation is a JSON array of modules. Each module has `nam
 ```
 
 Supported operations: `constant`, `add`, `sub`, `mul`, `div`, `div_s`, `mod_u`, `mod_s`, `and`, `or`, `xor`, `not`, `neg`, `reverse`, `shl`, `shr_u`, `shr_s`, `eq`, `ne`, `lt_s`, `lt_u`, `ge_s`, `ge_u`, `gt_s`, `gt_u`, `le_s`, `le_u`, `or_reduce`, `and_reduce`, `xor_reduce`, `concat`, `extract`, `mux`, `sext`, `zext`, `reg`, `mem`, `instance`, `output`.
+
+## IR Simulation
+
+The pure-Python interpreter supports the complete JSON-IR, including registers,
+memories, multiple clock domains, and hierarchical instances. Inputs retain
+their previous values when omitted; registers and uninitialized memories start
+at zero. A register or memory updates only when its clock input changes from 0
+to 1.
+
+```python
+from cppl import Interpreter
+
+sim = Interpreter.from_json(open("examples/register.json").read(), top="BasicReg")
+
+print(sim.evaluate({"clk": 0, "d": 42}))  # {"q": 0}
+print(sim.evaluate({"clk": 1}))           # {"q": 42}
+print(sim.peek("q_reg"))                   # inspect an internal SSA value
+```
+
+For DSL designs, use `design.interpreter(top="ModuleName")` after adding the
+modules. `peek_memory("instance.path.memory_name")` returns an immutable memory
+snapshot, and `reset_state()` restores initial register and memory contents.
 
 ### Memory (`mem`)
 

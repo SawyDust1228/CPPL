@@ -27,3 +27,7 @@ class CycleError(ValidationError):
 
 class CodegenError(CircuitPPLError):
     """Errors during MLIR/CIRCT code generation."""
+
+
+class SimulationError(CircuitPPLError):
+    """Errors while interpreting or simulating JSON-IR."""

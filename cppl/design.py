@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from .ir.parser import parse_design
 from .ir.validator import validate_design
@@ -12,6 +12,9 @@ from .ir.infer import infer_widths
 from .agents.models import AgentConfig, CompilationReport
 from .frontend.compiler import CompilationError, compile_modules_with_report
 from .frontend.module import ModuleDef
+
+if TYPE_CHECKING:
+    from .ir.interpreter import Interpreter
 
 
 class Design:
@@ -103,3 +106,14 @@ class Design:
 
         modules, widths = self._ir_pipeline(max_retries=max_retries)
         return generate_verilog(modules, widths, top=top, optimize=optimize)
+
+    def interpreter(
+        self,
+        top: Optional[str] = None,
+        max_retries: int = 3,
+    ) -> "Interpreter":
+        """Compile the design and return a stateful IR interpreter."""
+        from .ir.interpreter import Interpreter
+
+        modules, widths = self._ir_pipeline(max_retries=max_retries)
+        return Interpreter(modules, widths=widths, top=top)
