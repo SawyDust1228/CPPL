@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
 from .types import _PortType
+from .patterns import Pattern, normalize_patterns
 
 
 @dataclass
@@ -105,6 +106,7 @@ class ModuleDef:
     docstring: str
     func: Callable
     instances: List[InstanceCall] = field(default_factory=list)
+    patterns: tuple[Pattern, ...] = field(default_factory=tuple)
 
     def __call__(self, *args, **kwargs):
         """Instantiate this module inside another @module body.
@@ -240,7 +242,7 @@ def _instance_assignment_names(func: Callable) -> List[Optional[str]]:
     return names
 
 
-def module(func: Callable) -> ModuleDef:
+def _build_module(func: Callable, patterns: object = None) -> ModuleDef:
     """Decorator that converts a typed Python function into a :class:`ModuleDef`.
 
     Input ports come from function parameters annotated with ``In[N]`` or ``Clock``.
@@ -372,4 +374,17 @@ def module(func: Callable) -> ModuleDef:
         docstring=docstring,
         func=func,
         instances=instances,
+        patterns=normalize_patterns(patterns, ports),
     )
+
+
+def module(func: Optional[Callable] = None, *, patterns: object = None):
+    """Decorate a hardware function, optionally with executable patterns.
+
+    Both ``@module`` and ``@module(patterns=[...])`` are supported.
+    """
+    if func is None:
+        return lambda decorated: _build_module(decorated, patterns)
+    if not callable(func):
+        raise TypeError("@module expects a callable")
+    return _build_module(func, patterns)

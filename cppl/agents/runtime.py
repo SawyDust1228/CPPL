@@ -18,6 +18,7 @@ from .models import (
 from .worker import ModuleWorker, _make_stub_dicts
 from ..frontend.module import ModuleDef
 from ..ir.infer import infer_widths
+from ..ir.patterns import run_patterns
 from ..ir.parser import parse_design
 from ..ir.validator import validate_design
 
@@ -77,6 +78,45 @@ def _blocked_by_failure(
                 blocked.add(dependent)
                 pending.append(dependent)
     return blocked
+
+
+def _transitive_dependencies(
+    name: str,
+    dependencies: dict[str, set[str]],
+) -> set[str]:
+    result: set[str] = set()
+    pending = list(dependencies[name])
+    while pending:
+        dependency = pending.pop()
+        if dependency in result:
+            continue
+        result.add(dependency)
+        pending.extend(dependencies[dependency])
+    return result
+
+
+def _missing_pattern_dependencies(
+    mod: ModuleDef,
+    known_names: set[str],
+) -> tuple[str, ...]:
+    if not mod.patterns:
+        return ()
+    missing: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(current: ModuleDef) -> None:
+        if current.name in visited:
+            return
+        visited.add(current.name)
+        for instance in current.instances:
+            if instance.target_name not in known_names:
+                missing.add(instance.target_name)
+                continue
+            if instance.target_mod is not None:
+                visit(instance.target_mod)
+
+    visit(mod)
+    return tuple(sorted(missing))
 
 
 class CompilationCoordinator:
@@ -169,6 +209,15 @@ class CompilationCoordinator:
                     backend.get,
                     cache,
                     max_retries,
+                    dependency_modules=[
+                        reports[mod.name].module_dict
+                        for mod in modules
+                        if mod.name in _transitive_dependencies(name, dependencies)
+                        and reports[mod.name].module_dict is not None
+                    ],
+                    missing_pattern_dependencies=_missing_pattern_dependencies(
+                        by_name[name], set(by_name)
+                    ),
                 )
                 for name in ready
             }
@@ -231,7 +280,21 @@ class CompilationCoordinator:
                 external_stubs = _make_stub_dicts(external_instances)
                 parsed = parse_design(external_stubs + ordered_module_dicts)
                 validate_design(parsed)
-                infer_widths(parsed)
+                widths = infer_widths(parsed)
+                for mod in modules:
+                    try:
+                        reports[mod.name].patterns_checked = run_patterns(
+                            parsed,
+                            mod.name,
+                            mod.patterns,
+                            widths=widths,
+                        )
+                    except Exception as exc:
+                        reports[mod.name].status = "failed"
+                        reports[mod.name].error_category = type(exc).__name__
+                        reports[mod.name].error = str(exc)
+                        reports[mod.name].module_dict = None
+                        raise
                 for report in reports.values():
                     if (
                         not report.cache_hit

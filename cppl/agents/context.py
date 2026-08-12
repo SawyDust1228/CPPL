@@ -9,9 +9,10 @@ from typing import Iterable
 
 from .models import ContextBudgetError, DiagnosticPacket, ResolvedAgentConfig
 from ..frontend.module import InstanceCall, ModuleDef
+from ..frontend.patterns import pattern_as_dict
 
 
-PROMPT_VERSION = "cppl-agent-v2.0"
+PROMPT_VERSION = "cppl-agent-v2.1-patterns"
 IR_VERSION = "json-ir-v1"
 
 COMPACT_SYSTEM_PROMPT = r"""You compile one hardware module into a CPPL JSON-IR body.
@@ -180,6 +181,7 @@ def _base_payload(
         "module": mod.name,
         "ports": _port_contract(mod),
         "requirements": description,
+        "patterns": [pattern_as_dict(pattern) for pattern in mod.patterns],
         "instances": [
             *(_instance_contract(inst, "already_preplaced") for inst in preplaced_instances),
             *(_instance_contract(inst, "must_emit") for inst in deferred_instances),
@@ -188,6 +190,10 @@ def _base_payload(
             "Do not emit already_preplaced instance operations.",
             "Emit every must_emit instance exactly once after its inputs exist.",
             "Drive every output port in the final output operation.",
+            "Satisfy every executable input/output pattern.",
+            "Each case starts from zero/reset simulation state.",
+            "Each sequence starts from zero/reset state; its steps share state.",
+            "Step inputs are partial updates and step outputs are partial checks.",
         ],
     }
 

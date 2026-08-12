@@ -4,6 +4,7 @@ from .parser import parse_design
 from .validator import validate_design
 from .infer import infer_widths
 from .interpreter import Interpreter
+from .patterns import run_patterns
 from .errors import (
     CircuitPPLError,
     ParseError,
@@ -13,6 +14,8 @@ from .errors import (
     WidthError,
     CodegenError,
     SimulationError,
+    PatternMismatch,
+    PatternDependencyMissing,
 )
 
 __all__ = [
@@ -20,6 +23,7 @@ __all__ = [
     "validate_design",
     "infer_widths",
     "Interpreter",
+    "run_patterns",
     "CircuitPPLError",
     "ParseError",
     "ValidationError",
@@ -28,4 +32,6 @@ __all__ = [
     "WidthError",
     "CodegenError",
     "SimulationError",
+    "PatternMismatch",
+    "PatternDependencyMissing",
 ]

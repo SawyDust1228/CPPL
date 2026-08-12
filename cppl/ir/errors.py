@@ -31,3 +31,11 @@ class CodegenError(CircuitPPLError):
 
 class SimulationError(CircuitPPLError):
     """Errors while interpreting or simulating JSON-IR."""
+
+
+class PatternMismatch(CircuitPPLError):
+    """An interpreted module did not satisfy an executable pattern."""
+
+
+class PatternDependencyMissing(CircuitPPLError):
+    """Pattern validation cannot run because a real dependency IR is missing."""

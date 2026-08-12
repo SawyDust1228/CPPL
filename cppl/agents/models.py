@@ -199,6 +199,7 @@ class ModuleCompileReport:
     input_tokens_estimate: int = 0
     output_tokens_estimate: int = 0
     cache_hit: bool = False
+    patterns_checked: int = 0
     compression_events: list[str] = field(default_factory=list)
     error_category: Optional[str] = None
     error: Optional[str] = None

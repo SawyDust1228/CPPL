@@ -51,6 +51,39 @@ Key points:
 - Modules can instantiate other modules by calling them; use f-string returns to reference instance outputs
 - `Design.add()` recursively discovers and adds all sub-modules — only the top-level module needs to be added
 
+### Executable I/O Patterns
+
+Use `@module(patterns=[...])` to provide examples that are executed against each
+generated IR candidate. Patterns are included in the generation prompt and are
+also independently checked by the IR interpreter. A mismatch is returned to the
+repair agent with the failing inputs, expected outputs, and actual outputs.
+
+```python
+from cppl import Case, Clock, In, Out, Sequence, Step, module
+
+@module(patterns=[
+    Case(inputs={"a": 1, "b": 2}, outputs={"out": 3}),
+])
+def Adder(a: In[8], b: In[8]) -> Out[8]:
+    """out equals a plus b."""
+    pass
+
+@module(patterns=[
+    Sequence(steps=[
+        Step(inputs={"clk": 0, "d": 7}),
+        Step(inputs={"clk": 1}, outputs={"out": 7}),
+    ]),
+])
+def Register(clk: Clock, d: In[8]) -> Out[8]:
+    """Capture d on the rising edge of clk."""
+    pass
+```
+
+Each `Case` or `Sequence` starts from reset interpreter state. Steps within one
+sequence share state, omitted inputs retain their previous values, and only the
+listed outputs are checked. Passing patterns demonstrate agreement with those
+examples; they are executable tests rather than a formal proof for every input.
+
 ### Agent Runtime
 
 CPPL compiles each module in an isolated Agent context. Independent modules are

@@ -25,6 +25,7 @@ from ..frontend.const_analysis import normalize_constants
 from ..frontend.module import InstanceCall, ModuleDef
 from ..ir.errors import CircuitPPLError
 from ..ir.infer import infer_widths
+from ..ir.patterns import run_patterns
 from ..ir.parser import parse_design
 from ..ir.validator import validate_design
 
@@ -147,22 +148,35 @@ class ModuleWorker:
         backend_factory: Callable[[], APPLBackend],
         cache: ModuleCache,
         max_retries: int,
+        dependency_modules: list[dict] | None = None,
+        missing_pattern_dependencies: tuple[str, ...] = (),
     ) -> None:
         self.mod = mod
         self.config = config
         self.backend_factory = backend_factory
         self.cache = cache
         self.max_retries = max_retries
+        self.dependency_modules = list(dependency_modules or [])
+        self.missing_pattern_dependencies = missing_pattern_dependencies
+        self._patterns_checked = 0
         self.ports = _ports_dict(mod)
         self.preplaced, self.deferred = _split_instances(mod)
         self.preplaced_ops = _instance_ops(self.preplaced)
         self.stub_dicts = _make_stub_dicts(mod.instances)
 
     def _validate(self, module_dict: dict) -> None:
-        design = self.stub_dicts + [module_dict]
+        real_names = {module["name"] for module in self.dependency_modules}
+        stubs = [stub for stub in self.stub_dicts if stub["name"] not in real_names]
+        design = stubs + self.dependency_modules + [module_dict]
         modules = parse_design(design)
         validate_design(modules)
-        infer_widths(modules)
+        widths = infer_widths(modules)
+        self._patterns_checked = run_patterns(
+            modules,
+            self.mod.name,
+            self.mod.patterns,
+            widths=widths,
+        )
 
     def _materialize(self, llm_body: list) -> dict:
         missing = [
@@ -241,13 +255,24 @@ class ModuleWorker:
     def run(self) -> ModuleCompileReport:
         started = time.monotonic()
         report = ModuleCompileReport(module_name=self.mod.name, status="cache_lookup")
-        cache_key = self.cache.key_for(self.mod)
+        if self.missing_pattern_dependencies:
+            report.status = "failed"
+            report.error_category = "PatternDependencyMissing"
+            report.error = (
+                f"Module '{self.mod.name}' patterns require real dependency IR for: "
+                + ", ".join(self.missing_pattern_dependencies)
+            )
+            report.duration_seconds = time.monotonic() - started
+            return report
+
+        cache_key = self.cache.key_for(self.mod, self.dependency_modules)
         report.cache_key = cache_key
         cached = self.cache.load(cache_key, self._validate)
         if cached is not None:
             report.status = "success"
             report.cache_hit = True
             report.module_dict = cached
+            report.patterns_checked = self._patterns_checked
             report.duration_seconds = time.monotonic() - started
             return report
 
@@ -304,6 +329,7 @@ class ModuleWorker:
 
                 report.status = "success"
                 report.module_dict = module_dict
+                report.patterns_checked = self._patterns_checked
                 report.compression_events = list(dict.fromkeys(report.compression_events))
                 report.duration_seconds = time.monotonic() - started
                 return report

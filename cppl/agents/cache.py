@@ -12,6 +12,7 @@ from typing import Any, Callable, Optional
 from .context import IR_VERSION, PROMPT_VERSION
 from .models import ResolvedAgentConfig
 from ..frontend.module import ModuleDef
+from ..frontend.patterns import pattern_as_dict
 from ..ir.errors import CircuitPPLError
 
 
@@ -36,6 +37,7 @@ class ModuleCache:
                 for port in mod.ports
             ],
             "description": mod.docstring,
+            "patterns": [pattern_as_dict(pattern) for pattern in mod.patterns],
             "instances": [
                 {
                     "module": inst.target_name,
@@ -56,11 +58,16 @@ class ModuleCache:
             ],
         }
 
-    def key_for(self, mod: ModuleDef) -> str:
+    def key_for(
+        self,
+        mod: ModuleDef,
+        dependency_modules: list[dict] | None = None,
+    ) -> str:
         payload = {
             "ir_version": IR_VERSION,
             "prompt_version": PROMPT_VERSION,
             "module": self._module_contract(mod),
+            "dependency_modules": dependency_modules or [],
             "model": self._model_identity,
             "config": self._config_identity,
         }
