@@ -1,4 +1,4 @@
-"""Compatibility frontend for the isolated CPPL agent runtime."""
+"""Compatibility frontend for the LangGraph CPPL agent runtime."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from ..agents.models import (
     ModuleCompileReport,
 )
 from ..agents.runtime import CompilationCoordinator
+from ..harness import CompileObserver
 from ..ir.errors import CircuitPPLError
 from .module import ModuleDef
 
@@ -31,14 +32,23 @@ class CompileResult:
 
 
 class CompilerSession:
-    """Compatibility wrapper; every module now receives an isolated context."""
+    """Compatibility wrapper around the LangGraph compilation coordinator."""
 
-    def __init__(self, agent_config: AgentConfig | None = None) -> None:
+    def __init__(
+        self,
+        agent_config: AgentConfig | None = None,
+        *,
+        observer: CompileObserver | None = None,
+    ) -> None:
         self.agent_config = agent_config
+        self.observer = observer
         self.last_report: CompilationReport | None = None
 
     def compile(self, mod: ModuleDef, max_retries: int = 3) -> dict:
-        report = CompilationCoordinator(self.agent_config).compile(
+        report = CompilationCoordinator(
+            self.agent_config,
+            observer=self.observer,
+        ).compile(
             [mod],
             max_retries=max_retries,
         )
@@ -67,10 +77,12 @@ def compile_module(
     mod: ModuleDef,
     max_retries: int = 3,
     agent_config: AgentConfig | None = None,
+    *,
+    observer: CompileObserver | None = None,
 ) -> CompileResult:
-    """Compile one module using a bounded, isolated Generator/Repair worker."""
+    """Compile one module using the LangGraph Generator/Repair workflow."""
     try:
-        report = CompilationCoordinator(agent_config).compile(
+        report = CompilationCoordinator(agent_config, observer=observer).compile(
             [mod],
             max_retries=max_retries,
         )
@@ -87,9 +99,11 @@ def compile_modules_with_report(
     mods: List[ModuleDef],
     max_retries: int = 3,
     agent_config: AgentConfig | None = None,
+    *,
+    observer: CompileObserver | None = None,
 ) -> CompilationReport:
     """Compile a module DAG and return detailed non-sensitive diagnostics."""
-    return CompilationCoordinator(agent_config).compile(
+    return CompilationCoordinator(agent_config, observer=observer).compile(
         mods,
         max_retries=max_retries,
     )
@@ -99,6 +113,8 @@ def compile_modules(
     mods: List[ModuleDef],
     max_retries: int = 3,
     agent_config: AgentConfig | None = None,
+    *,
+    observer: CompileObserver | None = None,
 ) -> List[CompileResult]:
     """Compatibility API returning one result per input module."""
     try:
@@ -106,6 +122,7 @@ def compile_modules(
             mods,
             max_retries=max_retries,
             agent_config=agent_config,
+            observer=observer,
         )
         return [
             result_from_report(compilation.module_reports[mod.name]) for mod in mods

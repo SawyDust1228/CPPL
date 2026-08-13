@@ -1,4 +1,4 @@
-"""Agent runtime for isolated, cacheable CPPL module compilation."""
+"""LangChain/LangGraph runtime for cacheable CPPL module compilation."""
 
 from .models import (
     AgentConfig,
@@ -8,6 +8,8 @@ from .models import (
     ModuleCompileReport,
 )
 from .runtime import CompilationCoordinator
+from .backend import LangChainBackend, LLMBackendError
+from ..harness import CompileEvent, CompileObserver, TerminalCompileUI
 
 __all__ = [
     "AgentConfig",
@@ -16,4 +18,9 @@ __all__ = [
     "ContextBudgetError",
     "DiagnosticPacket",
     "ModuleCompileReport",
+    "LangChainBackend",
+    "LLMBackendError",
+    "CompileEvent",
+    "CompileObserver",
+    "TerminalCompileUI",
 ]

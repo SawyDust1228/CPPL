@@ -86,11 +86,13 @@ examples; they are executable tests rather than a formal proof for every input.
 
 ### Agent Runtime
 
-CPPL compiles each module in an isolated Agent context. Independent modules are
-compiled concurrently in dependency waves; validation failures are repaired in
-a fresh context containing only the latest candidate and compact diagnostics.
-Validated results are cached by content under `.cppl/cache`, so compiling an
-unchanged design again requires no LLM calls.
+CPPL's complete agent system is implemented with LangChain and LangGraph.
+LangChain owns provider chat models, prompt pipelines, JSON parsing, and
+transport retries. A per-module LangGraph handles cache lookup, generation,
+validation, requirement compression, and repair loops; a parent LangGraph
+coordinates dependency waves, bounded concurrency, failure propagation, and
+whole-design validation. Validated results are cached by content under
+`.cppl/cache`, so compiling an unchanged design again requires no LLM calls.
 
 Existing code continues to work. Optional runtime controls and reports are
 available through `AgentConfig`:
@@ -114,6 +116,30 @@ for name, module_report in report.module_reports.items():
 Python configuration overrides `CPPL_AGENT_*` environment variables. Reports
 contain timing, token estimates, cache and diagnostic metadata, but never store
 API keys or complete prompts/responses.
+
+Compilation logs are enabled by default and written to `stderr`, so JSON, MLIR,
+and Verilog output on `stdout` remains clean:
+
+```text
+[CPPL    0.02s] START    — compiling 2 module(s)
+[CPPL    0.05s] GENERATE Adder8 — attempt 1/3
+[CPPL    1.24s] SUCCESS  Adder8 — validated in 1.19s
+[CPPL    2.12s] DONE     — 2 module(s), 2 LLM call(s), 0 cache hit(s) in 2.10s
+```
+
+Use `AgentConfig(log_enabled=False)` or `CPPL_AGENT_LOG_ENABLED=false` for
+silent compilation. Custom applications can receive the same structured event
+stream through an observer:
+
+```python
+from cppl import CompileEvent, Design
+
+class MyObserver:
+    def on_event(self, event: CompileEvent) -> None:
+        save_event(event)
+
+design = Design(observer=MyObserver())
+```
 
 ### Run the Demo
 
@@ -197,14 +223,15 @@ The `mem` op creates register-array memories with configurable read/write ports:
 
 ## Dependencies
 
-- [appl](https://github.com/appl-team/appl) — LLM prompt framework
+- [LangChain](https://github.com/langchain-ai/langchain) — chat models and prompt pipelines
+- [LangGraph](https://github.com/langchain-ai/langgraph) — agent workflow orchestration
 - [pycde](https://github.com/llvm/circt) — Python CIRCT bindings for MLIR/Verilog emission
 - An LLM API key configured for your chosen provider
 
 ### Environment Configuration
 
 Create a root `.env` file for your provider credentials and model selection.
-CircuitPPL reads LLM configuration from `.env`; `appl.yaml` is not required.
+CircuitPPL reads LangChain model configuration from `.env`.
 
 Recommended generic variables:
 
@@ -229,7 +256,10 @@ Notes:
 - `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY`, and `LLM_BASE_URL` are the primary, provider-agnostic settings.
 - If `LLM_PROVIDER` is set, CircuitPPL also checks `${PROVIDER}_MODEL`, `${PROVIDER}_API_KEY`, and `${PROVIDER}_BASE_URL`.
 - Existing fallbacks like `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_BASE_URL`, and `OPENAI_BASE_URL` still work.
-- `LLM_MODEL` is required for DSL compilation because there is no `appl.yaml` fallback.
+- `LLM_MODEL` is required for DSL compilation.
+- `anthropic/*` models use `langchain-anthropic`; OpenAI and OpenAI-compatible
+  endpoints use `langchain-openai`. Non-OpenAI compatible providers must set a
+  base URL.
 - Optional generation overrides are available via `LLM_TEMPERATURE`, `LLM_TOP_P`, and `LLM_REASONING_EFFORT`. By default CircuitPPL does not force `temperature`, which avoids compatibility issues with models such as `gpt-5`.
 
 ## Citation
