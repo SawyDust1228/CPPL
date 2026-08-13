@@ -7,6 +7,9 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
 from .models import ContextBudgetError, DiagnosticPacket, ResolvedAgentConfig
 from ..frontend.module import InstanceCall, ModuleDef
 from ..frontend.patterns import pattern_as_dict
@@ -32,6 +35,16 @@ output{op:"output",args:{output_port:value_id}}.
 Binary operands must have equal widths; comparisons and reductions return 1 bit; mux select is 1 bit; concat is MSB to LSB. Decimal JSON numbers may be used in operand positions and will be converted to typed constants. Preserve every required instance exactly. Do not emit comments, markdown, prose, or a module wrapper."""
 
 COMPRESSION_SYSTEM_PROMPT = r"""Compress one source chunk of hardware requirements without changing or omitting any behavior, encoding, width, reset, timing, memory, or interface constraint. Return only JSON: {"sources":["Rxxx"],"requirements":["atomic requirement",...]}. Preserve the supplied source ID exactly. Do not invent requirements."""
+
+GENERATION_PROMPT = ChatPromptTemplate.from_messages(
+    [("system", COMPACT_SYSTEM_PROMPT), ("human", "{{{payload}}}")],
+    template_format="mustache",
+)
+COMPRESSION_PROMPT = ChatPromptTemplate.from_messages(
+    [("system", COMPRESSION_SYSTEM_PROMPT), ("human", "{{{payload}}}")],
+    template_format="mustache",
+)
+JSON_OUTPUT_PARSER = JsonOutputParser()
 
 
 @dataclass(frozen=True)
@@ -126,9 +139,10 @@ def build_requirement_compression_context(
             f"Requirement source {source} needs approximately {estimate} input "
             f"tokens, but the input budget is {config.input_budget_tokens}."
         )
+    messages = COMPRESSION_PROMPT.format_messages(payload=payload)
     return AgentContext(
-        system_prompt=COMPRESSION_SYSTEM_PROMPT,
-        user_prompt=payload,
+        system_prompt=str(messages[0].content),
+        user_prompt=str(messages[1].content),
         input_tokens_estimate=estimate,
         compression_events=("requirements_chunk_compressed",),
     )
@@ -239,9 +253,10 @@ def build_agent_context(
             f"but the configured input budget is {config.input_budget_tokens}."
         )
 
+    messages = GENERATION_PROMPT.format_messages(payload=user_prompt)
     return AgentContext(
-        system_prompt=COMPACT_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
+        system_prompt=str(messages[0].content),
+        user_prompt=str(messages[1].content),
         input_tokens_estimate=estimate,
         compression_events=tuple(dict.fromkeys(events)),
     )

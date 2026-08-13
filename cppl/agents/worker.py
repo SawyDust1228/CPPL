@@ -1,15 +1,19 @@
-"""Isolated Generator/Repair worker for one CPPL module."""
+"""LangGraph workflow for generating and repairing one CPPL module."""
 
 from __future__ import annotations
 
 import json
 import re
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, TypedDict
 
-from .backend import APPLBackend
+from langgraph.graph import END, START, StateGraph
+from langchain_core.exceptions import OutputParserException
+
+from .backend import LLMBackend
 from .cache import ModuleCache
 from .context import (
+    JSON_OUTPUT_PARSER,
     build_agent_context,
     build_requirement_compression_context,
     estimate_tokens,
@@ -21,6 +25,7 @@ from .models import (
     ModuleCompileReport,
     ResolvedAgentConfig,
 )
+from ..harness import CompileEventEmitter
 from ..frontend.const_analysis import normalize_constants
 from ..frontend.module import InstanceCall, ModuleDef
 from ..ir.errors import CircuitPPLError
@@ -31,17 +36,28 @@ from ..ir.validator import validate_design
 
 
 def extract_json_array(text: str) -> list:
-    text = text.strip()
-    fenced = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    """Parse one JSON array using LangChain's JSON output parser."""
+    stripped = text.strip()
+    fenced = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
     if fenced:
-        text = fenced.group(1).strip()
-    elif text.startswith("```"):
-        raise json.JSONDecodeError(
-            "markdown JSON fence is incomplete; response was likely truncated",
-            text,
-            0,
+        stripped = fenced.group(1).strip()
+    elif stripped.startswith("```"):
+        raise OutputParserException(
+            "Markdown JSON fence is incomplete; response was likely truncated.",
+            llm_output=text,
         )
-    value = json.loads(text)
+    if not stripped.startswith("[") or not stripped.endswith("]"):
+        raise OutputParserException(
+            "The response must contain one complete JSON array.",
+            llm_output=text,
+        )
+    try:
+        json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise OutputParserException(
+            f"Invalid JSON array: {exc}", llm_output=text
+        ) from exc
+    value = JSON_OUTPUT_PARSER.parse(stripped)
     if not isinstance(value, list):
         raise ValueError("response root must be a JSON array")
     return value
@@ -146,104 +162,228 @@ def diagnostic_from_exception(exc: Exception) -> DiagnosticPacket:
     )
 
 
-class ModuleWorker:
+class ModuleAgentState(TypedDict, total=False):
+    mod: ModuleDef
+    dependency_modules: list[dict]
+    missing_pattern_dependencies: tuple[str, ...]
+    report: ModuleCompileReport
+    started: float
+    cache_key: str
+    preplaced: list[InstanceCall]
+    deferred: list[InstanceCall]
+    ports: dict
+    description_override: Optional[str]
+    candidate: Optional[list]
+    diagnostic: Optional[DiagnosticPacket]
+    system_prompt: str
+    user_prompt: str
+    response_text: str
+    route: str
+
+
+class ModuleAgentGraph:
+    """Compiled LangGraph state machine for one module compilation."""
+
     def __init__(
         self,
-        mod: ModuleDef,
         config: ResolvedAgentConfig,
-        backend_factory: Callable[[], APPLBackend],
+        backend_factory: Callable[[], LLMBackend],
         cache: ModuleCache,
         max_retries: int,
-        dependency_modules: list[dict] | None = None,
-        missing_pattern_dependencies: tuple[str, ...] = (),
+        events: CompileEventEmitter,
     ) -> None:
-        self.mod = mod
         self.config = config
         self.backend_factory = backend_factory
         self.cache = cache
         self.max_retries = max_retries
-        self.dependency_modules = list(dependency_modules or [])
-        self.missing_pattern_dependencies = missing_pattern_dependencies
-        self._patterns_checked = 0
-        self.ports = build_ports_dict(mod)
-        self.preplaced, self.deferred = split_instances_by_placement(mod)
-        self.preplaced_ops = build_instance_ops(self.preplaced)
-        self.stub_dicts = build_stub_modules(mod.instances)
+        self.events = events
+        self.graph = self._build_graph().compile()
 
-    def validate_candidate(self, module_dict: dict) -> None:
-        real_names = {module["name"] for module in self.dependency_modules}
-        stubs = [stub for stub in self.stub_dicts if stub["name"] not in real_names]
-        design = stubs + self.dependency_modules + [module_dict]
-        modules = parse_design(design)
+    def _validate_candidate(
+        self,
+        state: ModuleAgentState,
+        module_dict: dict,
+    ) -> int:
+        dependency_modules = state.get("dependency_modules", [])
+        real_names = {module["name"] for module in dependency_modules}
+        stubs = [
+            stub
+            for stub in build_stub_modules(state["mod"].instances)
+            if stub["name"] not in real_names
+        ]
+        modules = parse_design(stubs + dependency_modules + [module_dict])
         validate_design(modules)
         widths = infer_widths(modules)
-        self._patterns_checked = run_patterns(
+        return run_patterns(
             modules,
-            self.mod.name,
-            self.mod.patterns,
+            state["mod"].name,
+            state["mod"].patterns,
             widths=widths,
         )
 
-    def materialize_candidate(self, llm_body: list) -> dict:
+    def _materialize(self, state: ModuleAgentState, body: list) -> tuple[dict, int]:
         missing = [
-            inst for inst in self.deferred if not contains_instance_op(llm_body, inst)
+            inst
+            for inst in state["deferred"]
+            if not contains_instance_op(body, inst)
         ]
         if missing:
             names = ", ".join(inst.target_name for inst in missing)
             raise ValueError(f"Missing required instance operation(s): {names}")
         full_body = normalize_constants(
-            self.preplaced_ops + llm_body,
-            self.ports,
-            self.mod.instances,
+            build_instance_ops(state["preplaced"]) + body,
+            state["ports"],
+            state["mod"].instances,
         )
         module_dict = {
-            "name": self.mod.name,
-            "ports": self.ports,
+            "name": state["mod"].name,
+            "ports": state["ports"],
             "body": full_body,
         }
-        self.validate_candidate(module_dict)
-        return module_dict
+        return module_dict, self._validate_candidate(state, module_dict)
 
-    def compress_requirements(self, report: ModuleCompileReport) -> str:
-        compressed: list[tuple[str, list[str]]] = []
-        for source, text in requirement_chunks(self.mod.docstring, self.config):
-            context = build_requirement_compression_context(
-                source,
-                text,
+    def _initialize(self, state: ModuleAgentState) -> dict:
+        mod = state["mod"]
+        report = ModuleCompileReport(module_name=mod.name, status="cache_lookup")
+        preplaced, deferred = split_instances_by_placement(mod)
+        return {
+            "started": time.monotonic(),
+            "report": report,
+            "preplaced": preplaced,
+            "deferred": deferred,
+            "ports": build_ports_dict(mod),
+            "candidate": None,
+            "diagnostic": None,
+            "description_override": None,
+        }
+
+    def _lookup_cache(self, state: ModuleAgentState) -> dict:
+        report = state["report"]
+        module_name = state["mod"].name
+        self.events.emit(
+            "cache_check",
+            module_name=module_name,
+            stage="cache_lookup",
+            message="checking validated module cache",
+        )
+        if state.get("missing_pattern_dependencies"):
+            report.status = "failed"
+            report.error_category = "PatternDependencyMissing"
+            report.error = (
+                f"Module '{state['mod'].name}' patterns require real dependency IR for: "
+                + ", ".join(state["missing_pattern_dependencies"])
+            )
+            report.duration_seconds = time.monotonic() - state["started"]
+            self.events.emit(
+                "module_failed",
+                module_name=module_name,
+                stage="cache_lookup",
+                message=report.error or "missing pattern dependency",
+                metadata={"category": report.error_category},
+            )
+            return {"report": report, "route": "done"}
+
+        key = self.cache.key_for(state["mod"], state.get("dependency_modules"))
+        report.cache_key = key
+        patterns_checked = 0
+
+        def validate(module_dict: dict) -> None:
+            nonlocal patterns_checked
+            patterns_checked = self._validate_candidate(state, module_dict)
+
+        cached = self.cache.load(key, validate)
+        if cached is not None:
+            report.status = "success"
+            report.cache_hit = True
+            report.module_dict = cached
+            report.patterns_checked = patterns_checked
+            report.duration_seconds = time.monotonic() - state["started"]
+            self.events.emit(
+                "cache_hit",
+                module_name=module_name,
+                stage="cache_lookup",
+                message="reused validated JSON-IR",
+            )
+            self.events.emit(
+                "module_success",
+                module_name=module_name,
+                stage="complete",
+                message=f"cache hit in {report.duration_seconds:.2f}s",
+                metadata={"cache_hit": True},
+            )
+            return {"cache_key": key, "report": report, "route": "done"}
+        self.events.emit(
+            "cache_miss",
+            module_name=module_name,
+            stage="cache_lookup",
+            message="generation required",
+        )
+        return {"cache_key": key, "report": report, "route": "build"}
+
+    def _build_context(self, state: ModuleAgentState) -> dict:
+        report = state["report"]
+        try:
+            context = build_agent_context(
+                state["mod"],
+                state["preplaced"],
+                state["deferred"],
                 self.config,
+                candidate=state.get("candidate"),
+                diagnostic=state.get("diagnostic"),
+                description_override=state.get("description_override"),
             )
-            response = self.backend_factory().generate(
-                context.system_prompt,
-                context.user_prompt,
-                output_tokens=min(self.config.output_tokens, 2000),
+        except ContextBudgetError as exc:
+            if state.get("description_override") is not None:
+                return self._failure(state, exc)
+            report.status = "compressing"
+            self.events.emit(
+                "compress",
+                module_name=state["mod"].name,
+                stage="compressing",
+                message="requirements exceed context budget",
             )
-            report.compression_calls += 1
-            report.transport_retries += response.transport_retries
-            report.input_tokens_estimate += context.input_tokens_estimate
-            report.output_tokens_estimate += estimate_tokens(response.text)
-            try:
-                payload = json.loads(response.text)
-            except json.JSONDecodeError as exc:
-                raise ContextBudgetError(
-                    f"Requirement compression for {source} did not return JSON: {exc}"
-                ) from exc
-            if not isinstance(payload, dict) or payload.get("sources") != [source]:
-                raise ContextBudgetError(
-                    f"Requirement compression did not preserve source {source}."
+            return {"report": report, "route": "compress"}
+        report.input_tokens_estimate += context.input_tokens_estimate
+        report.compression_events.extend(context.compression_events)
+        return {
+            "report": report,
+            "system_prompt": context.system_prompt,
+            "user_prompt": context.user_prompt,
+            "route": "generate",
+        }
+
+    def _compress(self, state: ModuleAgentState) -> dict:
+        report = state["report"]
+        compressed: list[tuple[str, list[str]]] = []
+        try:
+            for source, text in requirement_chunks(state["mod"].docstring, self.config):
+                context = build_requirement_compression_context(source, text, self.config)
+                response = self.backend_factory().generate(
+                    context.system_prompt,
+                    context.user_prompt,
+                    output_tokens=min(self.config.output_tokens, 2000),
                 )
-            requirements = payload.get("requirements")
-            if (
-                not isinstance(requirements, list)
-                or not requirements
-                or any(
-                    not isinstance(item, str) or not item.strip()
-                    for item in requirements
-                )
-            ):
-                raise ContextBudgetError(
-                    f"Requirement compression for {source} returned no usable requirements."
-                )
-            compressed.append((source, [item.strip() for item in requirements]))
+                report.compression_calls += 1
+                report.transport_retries += response.transport_retries
+                report.input_tokens_estimate += context.input_tokens_estimate
+                report.output_tokens_estimate += estimate_tokens(response.text)
+                payload = JSON_OUTPUT_PARSER.parse(response.text)
+                if not isinstance(payload, dict) or payload.get("sources") != [source]:
+                    raise ContextBudgetError(
+                        f"Requirement compression did not preserve source {source}."
+                    )
+                requirements = payload.get("requirements")
+                if (
+                    not isinstance(requirements, list)
+                    or not requirements
+                    or any(not isinstance(item, str) or not item.strip() for item in requirements)
+                ):
+                    raise ContextBudgetError(
+                        f"Requirement compression for {source} returned no usable requirements."
+                    )
+                compressed.append((source, [item.strip() for item in requirements]))
+        except Exception as exc:
+            return self._failure(state, exc)
 
         lines: list[str] = []
         seen: set[tuple[str, str]] = set()
@@ -254,105 +394,167 @@ class ModuleWorker:
                     lines.append(f"[{source}] {requirement}")
                     seen.add(key)
         if not lines:
-            raise ContextBudgetError(
-                f"Module '{self.mod.name}' requirements could not be compressed."
+            return self._failure(
+                state,
+                ContextBudgetError(
+                    f"Module '{state['mod'].name}' requirements could not be compressed."
+                ),
             )
         report.compression_events.append("requirements_compressed_with_source_coverage")
-        return "\n".join(lines)
+        return {
+            "description_override": "\n".join(lines),
+            "report": report,
+            "route": "build",
+        }
 
-    def run(self) -> ModuleCompileReport:
-        started = time.monotonic()
-        report = ModuleCompileReport(module_name=self.mod.name, status="cache_lookup")
-        if self.missing_pattern_dependencies:
-            report.status = "failed"
-            report.error_category = "PatternDependencyMissing"
-            report.error = (
-                f"Module '{self.mod.name}' patterns require real dependency IR for: "
-                + ", ".join(self.missing_pattern_dependencies)
-            )
-            report.duration_seconds = time.monotonic() - started
-            return report
-
-        cache_key = self.cache.key_for(self.mod, self.dependency_modules)
-        report.cache_key = cache_key
-        cached = self.cache.load(cache_key, self.validate_candidate)
-        if cached is not None:
-            report.status = "success"
-            report.cache_hit = True
-            report.module_dict = cached
-            report.patterns_checked = self._patterns_checked
-            report.duration_seconds = time.monotonic() - started
-            return report
-
-        candidate: Optional[list] = None
-        diagnostic: Optional[DiagnosticPacket] = None
-        description_override: Optional[str] = None
+    def _generate(self, state: ModuleAgentState) -> dict:
+        report = state["report"]
+        attempt = report.attempts + 1
+        report.attempts = attempt
+        report.status = "generating" if attempt == 1 else "repairing"
+        event_kind = "generate" if attempt == 1 else "repair"
+        message = f"attempt {attempt}/{self.max_retries}"
+        diagnostic = state.get("diagnostic")
+        if diagnostic is not None and attempt > 1:
+            message += f" after {diagnostic.category}"
+        self.events.emit(
+            event_kind,
+            module_name=state["mod"].name,
+            stage=report.status,
+            attempt=attempt,
+            message=message,
+            metadata={"max_attempts": self.max_retries},
+        )
         try:
-            for attempt in range(1, self.max_retries + 1):
-                report.status = "generating" if attempt == 1 else "repairing"
-                try:
-                    context = build_agent_context(
-                        self.mod,
-                        self.preplaced,
-                        self.deferred,
-                        self.config,
-                        candidate=candidate,
-                        diagnostic=diagnostic,
-                        description_override=description_override,
-                    )
-                except ContextBudgetError:
-                    if description_override is not None:
-                        raise
-                    report.status = "compressing"
-                    description_override = self.compress_requirements(report)
-                    context = build_agent_context(
-                        self.mod,
-                        self.preplaced,
-                        self.deferred,
-                        self.config,
-                        candidate=candidate,
-                        diagnostic=diagnostic,
-                        description_override=description_override,
-                    )
-                report.input_tokens_estimate += context.input_tokens_estimate
-                report.compression_events.extend(context.compression_events)
-                response = self.backend_factory().generate(
-                    context.system_prompt,
-                    context.user_prompt,
-                )
-                report.attempts = attempt
-                report.transport_retries += response.transport_retries
-                report.output_tokens_estimate += estimate_tokens(response.text)
-                report.status = "validating"
-                try:
-                    candidate = extract_json_array(response.text)
-                    module_dict = self.materialize_candidate(candidate)
-                except (json.JSONDecodeError, ValueError, CircuitPPLError) as exc:
-                    diagnostic = diagnostic_from_exception(exc)
-                    if candidate is None:
-                        candidate = []
-                    if attempt >= self.max_retries:
-                        raise
-                    continue
-
-                report.status = "success"
-                report.module_dict = module_dict
-                report.patterns_checked = self._patterns_checked
-                report.compression_events = list(
-                    dict.fromkeys(report.compression_events)
-                )
-                report.duration_seconds = time.monotonic() - started
-                return report
+            response = self.backend_factory().generate(
+                state["system_prompt"], state["user_prompt"]
+            )
         except Exception as exc:
-            report.status = "failed"
-            report.error_category = type(exc).__name__
-            report.error = str(exc)
-            report.compression_events = list(dict.fromkeys(report.compression_events))
-            report.duration_seconds = time.monotonic() - started
-            return report
+            return self._failure(state, exc)
+        report.transport_retries += response.transport_retries
+        report.output_tokens_estimate += estimate_tokens(response.text)
+        report.status = "validating"
+        self.events.emit(
+            "validate",
+            module_name=state["mod"].name,
+            stage="validating",
+            attempt=attempt,
+            message="checking JSON-IR and executable patterns",
+        )
+        return {"response_text": response.text, "report": report, "route": "validate"}
 
+    def _validate(self, state: ModuleAgentState) -> dict:
+        report = state["report"]
+        candidate: list | None = None
+        try:
+            candidate = extract_json_array(state["response_text"])
+            module_dict, patterns_checked = self._materialize(state, candidate)
+        except (OutputParserException, ValueError, CircuitPPLError) as exc:
+            diagnostic = diagnostic_from_exception(exc)
+            if report.attempts >= self.max_retries:
+                return self._failure(state, exc, candidate=candidate or [])
+            self.events.emit(
+                "repair_scheduled",
+                module_name=state["mod"].name,
+                stage="repairing",
+                attempt=report.attempts + 1,
+                message=f"{type(exc).__name__}: {str(exc)[:180]}",
+                metadata={"category": type(exc).__name__},
+            )
+            return {
+                "candidate": candidate or [],
+                "diagnostic": diagnostic,
+                "report": report,
+                "route": "repair",
+            }
+        report.status = "success"
+        report.module_dict = module_dict
+        report.patterns_checked = patterns_checked
+        report.compression_events = list(dict.fromkeys(report.compression_events))
+        report.duration_seconds = time.monotonic() - state["started"]
+        self.events.emit(
+            "module_success",
+            module_name=state["mod"].name,
+            stage="complete",
+            attempt=report.attempts,
+            message=f"validated in {report.duration_seconds:.2f}s",
+            metadata={
+                "attempts": report.attempts,
+                "patterns_checked": report.patterns_checked,
+            },
+        )
+        return {"candidate": candidate, "report": report, "route": "done"}
+
+    def _failure(
+        self,
+        state: ModuleAgentState,
+        exc: Exception,
+        *,
+        candidate: list | None = None,
+    ) -> dict:
+        report = state["report"]
         report.status = "failed"
-        report.error_category = "AgentRuntimeError"
-        report.error = "Module worker stopped without a result"
-        report.duration_seconds = time.monotonic() - started
-        return report
+        report.error_category = type(exc).__name__
+        report.error = str(exc)
+        report.module_dict = None
+        report.compression_events = list(dict.fromkeys(report.compression_events))
+        report.duration_seconds = time.monotonic() - state["started"]
+        self.events.emit(
+            "module_failed",
+            module_name=state["mod"].name,
+            stage=report.status,
+            attempt=report.attempts or None,
+            message=f"{type(exc).__name__}: {str(exc)[:240]}",
+            metadata={"category": type(exc).__name__},
+        )
+        update: dict = {"report": report, "route": "done"}
+        if candidate is not None:
+            update["candidate"] = candidate
+        return update
+
+    @staticmethod
+    def _route(state: ModuleAgentState) -> str:
+        return state["route"]
+
+    def _build_graph(self) -> StateGraph:
+        graph = StateGraph(ModuleAgentState)
+        graph.add_node("initialize", self._initialize)
+        graph.add_node("lookup_cache", self._lookup_cache)
+        graph.add_node("build_context", self._build_context)
+        graph.add_node("compress_requirements", self._compress)
+        graph.add_node("invoke_generation_chain", self._generate)
+        graph.add_node("parse_and_validate", self._validate)
+        graph.add_edge(START, "initialize")
+        graph.add_edge("initialize", "lookup_cache")
+        graph.add_conditional_edges(
+            "lookup_cache", self._route, {"build": "build_context", "done": END}
+        )
+        graph.add_conditional_edges(
+            "build_context",
+            self._route,
+            {"compress": "compress_requirements", "generate": "invoke_generation_chain", "done": END},
+        )
+        graph.add_conditional_edges(
+            "compress_requirements",
+            self._route,
+            {"build": "build_context", "done": END},
+        )
+        graph.add_conditional_edges(
+            "invoke_generation_chain",
+            self._route,
+            {"validate": "parse_and_validate", "done": END},
+        )
+        graph.add_conditional_edges(
+            "parse_and_validate", self._route, {"repair": "build_context", "done": END}
+        )
+        return graph
+
+    def invoke(self, state: ModuleAgentState, config: dict | None = None) -> ModuleAgentState:
+        return self.graph.invoke(state, config=config)
+
+    def batch(
+        self,
+        states: list[ModuleAgentState],
+        config: dict | None = None,
+    ) -> list[ModuleAgentState]:
+        return self.graph.batch(states, config=config)

@@ -1,16 +1,13 @@
 """Tests for cppl.compiler: JSON extraction, prompt building, and compile flow."""
 
 import json
-from types import SimpleNamespace
-from unittest.mock import patch, MagicMock
 
 import pytest
+from langchain_core.exceptions import OutputParserException
 
 from cppl.env import (
-    apply_server_override,
     resolve_llm_generation_kwargs,
-    resolve_llm_server_override,
-    LLMServerOverride,
+    resolve_llm_model_config,
 )
 from cppl.frontend.types import In, Out
 from cppl.frontend.module import module, ModuleDef, PortInfo, InstanceCall
@@ -52,8 +49,16 @@ class TestExtractJson:
         assert arr[0]["op"] == "output"
 
     def test_invalid_json_raises(self):
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(OutputParserException):
             extract_json_array("this is not json")
+
+    def test_truncated_json_raises(self):
+        with pytest.raises(OutputParserException, match="complete JSON array"):
+            extract_json_array('[{"op":"output"}')
+
+    def test_incomplete_fence_raises(self):
+        with pytest.raises(OutputParserException, match="fence is incomplete"):
+            extract_json_array('```json\n[{"op":"output"}]')
 
 
 # -----------------------------------------------------------------------
@@ -231,30 +236,30 @@ class TestInstanceOps:
         assert len(stubs) == 1
 
 
-class TestLLMServerOverride:
+class TestLLMModelConfig:
     def test_resolve_generic_llm_env(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "openai")
         monkeypatch.setenv("LLM_MODEL", "gpt-4.1")
         monkeypatch.setenv("LLM_API_KEY", "test-key")
         monkeypatch.setenv("LLM_BASE_URL", "https://example.com/v1")
 
-        override = resolve_llm_server_override()
+        config = resolve_llm_model_config()
 
-        assert override is not None
-        assert override.server_name == "cppl_env"
-        assert override.provider == "openai"
-        assert override.model == "openai/gpt-4.1"
-        assert override.api_key == "test-key"
-        assert override.base_url == "https://example.com/v1"
+        assert config is not None
+        assert config.provider == "openai"
+        assert config.model == "gpt-4.1"
+        assert config.api_key == "test-key"
+        assert config.base_url == "https://example.com/v1"
 
     def test_resolve_provider_prefixes_bare_model(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "openai")
         monkeypatch.setenv("LLM_MODEL", "qwen3.6-plus")
 
-        override = resolve_llm_server_override()
+        config = resolve_llm_model_config()
 
-        assert override is not None
-        assert override.model == "openai/qwen3.6-plus"
+        assert config is not None
+        assert config.provider == "openai"
+        assert config.model == "qwen3.6-plus"
 
     def test_resolve_provider_specific_env(self, monkeypatch):
         monkeypatch.delenv("LLM_MODEL", raising=False)
@@ -265,53 +270,30 @@ class TestLLMServerOverride:
         monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
         monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
-        override = resolve_llm_server_override()
+        config = resolve_llm_model_config()
 
-        assert override is not None
-        assert override.provider == "deepseek"
-        assert override.model == "deepseek/deepseek-chat"
-        assert override.api_key == "deepseek-key"
-        assert override.base_url == "https://api.deepseek.com"
+        assert config is not None
+        assert config.provider == "deepseek"
+        assert config.model == "deepseek-chat"
+        assert config.api_key == "deepseek-key"
+        assert config.base_url == "https://api.deepseek.com"
 
-    def test_apply_server_override_creates_new_default_server(self):
-        configs = SimpleNamespace(
-            default_servers=SimpleNamespace(default="claude"),
-            servers={"claude": {"model": "anthropic/claude-sonnet-4-20250514"}},
-        )
+    def test_model_prefix_conflict_is_rejected(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+        monkeypatch.setenv("LLM_MODEL", "openai/gpt-4.1")
 
-        override = LLMServerOverride(
-            server_name="cppl_env",
-            provider="openai",
-            model="openai/gpt-4.1",
-            api_key="test-key",
-            base_url="https://example.com/v1",
-        )
-        apply_server_override(configs, override)
+        with pytest.raises(ValueError, match="conflicts"):
+            resolve_llm_model_config()
 
-        assert configs.default_servers.default == "cppl_env"
-        assert configs.servers["cppl_env"] == {
-            "model": "openai/gpt-4.1",
-            "provider": "openai",
-            "api_key": "test-key",
-            "base_url": "https://example.com/v1",
-        }
+    def test_bare_model_defaults_to_openai(self, monkeypatch):
+        monkeypatch.delenv("LLM_PROVIDER", raising=False)
+        monkeypatch.setenv("LLM_MODEL", "gpt-4.1")
 
-    def test_apply_server_override_with_base_url(self):
-        configs = SimpleNamespace(
-            default_servers=SimpleNamespace(default="claude"),
-            servers={"claude": {"model": "anthropic/claude-sonnet-4-20250514"}},
-        )
+        config = resolve_llm_model_config()
 
-        override = LLMServerOverride(
-            server_name="cppl_env",
-            model="openai/gpt-4.1",
-            base_url="https://proxy.example.com",
-        )
-        apply_server_override(configs, override)
-
-        assert configs.default_servers.default == "cppl_env"
-        assert configs.servers["cppl_env"]["model"] == "openai/gpt-4.1"
-        assert configs.servers["cppl_env"]["base_url"] == "https://proxy.example.com"
+        assert config is not None
+        assert config.provider == "openai"
+        assert config.model == "gpt-4.1"
 
 
 class TestLLMGenerationKwargs:

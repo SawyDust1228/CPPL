@@ -1,18 +1,23 @@
-"""APPL-backed LLM transport with isolated requests and transport retries."""
+"""LangChain chat-model transport used by CPPL agent graphs."""
 
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
+
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import Runnable
 
 from .models import AgentRuntimeError, ResolvedAgentConfig
-from ..env import apply_server_override, resolve_llm_server_override
+from ..env import LLMModelConfig, resolve_llm_model_config
 
 
 class LLMBackendError(AgentRuntimeError):
-    """The configured LLM transport failed after its retry budget."""
+    """The configured LangChain model failed after its retry budget."""
 
 
 @dataclass(frozen=True)
@@ -21,55 +26,117 @@ class BackendResponse:
     transport_retries: int
 
 
-class APPLBackend:
-    """Create one fresh APPL message list per semantic candidate request."""
+@runtime_checkable
+class LLMBackend(Protocol):
+    """Minimal interface consumed by the LangGraph module workflow."""
 
-    _configure_lock = threading.Lock()
-    _configured = False
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        output_tokens: int | None = None,
+    ) -> BackendResponse: ...
 
-    def __init__(self, config: ResolvedAgentConfig) -> None:
+
+class _RetryCounter(BaseCallbackHandler):
+    """Count attempts tagged by LangChain's RunnableRetry wrapper."""
+
+    def __init__(self) -> None:
+        self.attempts = 0
+        self._lock = threading.Lock()
+
+    def on_chat_model_start(self, serialized: dict, messages: list, **kwargs: Any) -> None:
+        with self._lock:
+            self.attempts += 1
+
+    def on_llm_start(self, serialized: dict, prompts: list[str], **kwargs: Any) -> None:
+        with self._lock:
+            self.attempts += 1
+
+
+def create_chat_model(settings: LLMModelConfig) -> BaseChatModel:
+    """Create the provider integration selected by environment configuration."""
+    common: dict[str, Any] = {
+        "model": settings.model,
+        "api_key": settings.api_key,
+        "max_retries": 0,
+    }
+    if settings.provider == "anthropic":
+        try:
+            from langchain_anthropic import ChatAnthropic
+        except ImportError as exc:
+            raise LLMBackendError(
+                "The 'langchain-anthropic' dependency is required for Anthropic."
+            ) from exc
+        if settings.base_url:
+            common["base_url"] = settings.base_url
+        return ChatAnthropic(**common)
+
+    if settings.provider != "openai" and not settings.base_url:
+        raise LLMBackendError(
+            f"Provider {settings.provider!r} is supported through an OpenAI-compatible "
+            "endpoint; set LLM_BASE_URL."
+        )
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError as exc:
+        raise LLMBackendError(
+            "The 'langchain-openai' dependency is required for OpenAI-compatible models."
+        ) from exc
+    if settings.base_url:
+        common["base_url"] = settings.base_url
+    return ChatOpenAI(**common)
+
+
+class LangChainBackend:
+    """Invoke provider chat models through a LangChain prompt pipeline."""
+
+    _prompt = ChatPromptTemplate.from_messages(
+        [("system", "{{{system_prompt}}}"), ("human", "{{{user_prompt}}}")],
+        template_format="mustache",
+    )
+
+    def __init__(
+        self,
+        config: ResolvedAgentConfig,
+        *,
+        chat_model: BaseChatModel | None = None,
+    ) -> None:
         self.config = config
-        self.configure_backend()
-
-    @classmethod
-    def configure_backend(cls) -> None:
-        with cls._configure_lock:
-            if cls._configured:
-                return
-            try:
-                import appl
-            except ImportError as exc:
-                raise LLMBackendError(
-                    "The 'applang' dependency is required for LLM compilation."
-                ) from exc
-
-            override = resolve_llm_server_override()
-            if override is None:
+        self.settings = resolve_llm_model_config()
+        if chat_model is None:
+            if self.settings is None:
                 raise LLMBackendError(
                     "Missing LLM configuration. Set LLM_MODEL and credentials "
                     "in the project root .env file."
                 )
-            target_name = apply_server_override(appl.global_vars.configs, override)
-            appl.server_manager.close_server(target_name)
-            cls._configured = True
+            chat_model = create_chat_model(self.settings)
+        self.chat_model = chat_model
 
     @staticmethod
     def model_identity() -> dict[str, Any]:
-        """Return cache-safe model identity without credentials."""
-        override = resolve_llm_server_override()
-        if override is None:
+        settings = resolve_llm_model_config()
+        if settings is None:
             return {"model": None, "provider": None, "base_url": None}
-        return {
-            "model": override.model,
-            "provider": override.provider,
-            "base_url": override.base_url,
-            "server_name": override.server_name,
-        }
+        return settings.identity
 
     @classmethod
     def peek_model_identity(cls) -> dict[str, Any]:
-        """Compatibility alias used before lazily constructing the backend."""
         return cls.model_identity()
+
+    def _chain(self, output_tokens: int | None) -> Runnable:
+        kwargs = {
+            "max_tokens": output_tokens or self.config.output_tokens,
+            "timeout": self.config.request_timeout,
+            **self.config.generation_kwargs,
+        }
+        model = self.chat_model.bind(**kwargs)
+        chain: Runnable = self._prompt | model | StrOutputParser()
+        return chain.with_retry(
+            stop_after_attempt=self.config.transport_retries + 1,
+            wait_exponential_jitter=True,
+        )
 
     def generate(
         self,
@@ -78,26 +145,18 @@ class APPLBackend:
         *,
         output_tokens: int | None = None,
     ) -> BackendResponse:
-        from appl import SystemMessage, UserMessage, gen
-
-        messages = [SystemMessage(system_prompt), UserMessage(user_prompt)]
-        kwargs = {
-            "max_tokens": output_tokens or self.config.output_tokens,
-            "timeout": self.config.request_timeout,
-            **self.config.generation_kwargs,
-        }
-        last_error: Exception | None = None
-        for retry in range(self.config.transport_retries + 1):
-            try:
-                response = gen(messages=messages, **kwargs)
-                return BackendResponse(str(response), retry)
-            except Exception as exc:
-                last_error = exc
-                if retry >= self.config.transport_retries:
-                    break
-                time.sleep(min(2**retry, 4))
-        raise LLMBackendError(
-            "LLM request failed after "
-            f"{self.config.transport_retries + 1} transport attempt(s): "
-            f"{type(last_error).__name__}: {last_error}"
-        ) from last_error
+        counter = _RetryCounter()
+        try:
+            text = self._chain(output_tokens).invoke(
+                {"system_prompt": system_prompt, "user_prompt": user_prompt},
+                config={"callbacks": [counter]},
+            )
+        except Exception as exc:
+            raise LLMBackendError(
+                "LLM request failed after "
+                f"{max(counter.attempts, 1)} transport attempt(s): "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        if not isinstance(text, str) or not text.strip():
+            raise LLMBackendError("LangChain returned an empty text response.")
+        return BackendResponse(text=text, transport_retries=max(counter.attempts - 1, 0))

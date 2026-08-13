@@ -1,4 +1,4 @@
-"""Environment-driven LLM server configuration helpers for CPPL."""
+"""Environment-driven LangChain model configuration helpers for CPPL."""
 
 from __future__ import annotations
 
@@ -6,21 +6,28 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Optional
 
 _ENV_LOADED = False
 
 
 @dataclass(frozen=True)
-class LLMServerOverride:
-    """Resolved LLM server settings loaded from environment variables."""
+class LLMModelConfig:
+    """Resolved LangChain chat-model settings loaded from the environment."""
 
-    server_name: str
+    provider: str
     model: str
-    provider: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+
+    @property
+    def identity(self) -> dict[str, Optional[str]]:
+        """Return cache-safe model identity without credentials."""
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "base_url": self.base_url,
+        }
 
 
 def load_dotenv() -> None:
@@ -104,35 +111,46 @@ def resolve_provider_specific_env(
     return resolve_env_value(*env_names)
 
 
-def resolve_llm_server_override() -> Optional[LLMServerOverride]:
-    """Resolve a generic LLM server override from environment variables."""
-    provider = resolve_env_value("LLM_PROVIDER")
-    model = resolve_env_value("LLM_MODEL")
-    if model is None:
-        model = resolve_provider_specific_env(provider, "MODEL")
-    if provider and model and "/" not in model:
-        model = f"{provider}/{model}"
+def resolve_llm_model_config() -> Optional[LLMModelConfig]:
+    """Resolve a provider and model for the LangChain chat-model factory."""
+    configured_provider = resolve_env_value("LLM_PROVIDER")
+    raw_model = resolve_env_value("LLM_MODEL")
+    if raw_model is None:
+        raw_model = resolve_provider_specific_env(configured_provider, "MODEL")
+    if raw_model is None:
+        return None
+
+    model_provider: Optional[str] = None
+    model = raw_model
+    if "/" in raw_model:
+        model_provider, model = raw_model.split("/", 1)
+    provider = (configured_provider or model_provider or "openai").lower()
+    if configured_provider and model_provider:
+        if configured_provider.lower() != model_provider.lower():
+            raise ValueError(
+                "LLM_PROVIDER conflicts with the provider prefix in LLM_MODEL: "
+                f"{configured_provider!r} != {model_provider!r}"
+            )
 
     base_url = resolve_env_value("LLM_BASE_URL")
     if base_url is None:
         base_url = resolve_provider_specific_env(provider, "BASE_URL")
     if base_url is None:
-        base_url = resolve_env_value("ANTHROPIC_BASE_URL", "OPENAI_BASE_URL")
+        base_url = resolve_env_value(
+            "ANTHROPIC_BASE_URL" if provider == "anthropic" else "OPENAI_BASE_URL"
+        )
 
     api_key = resolve_env_value("LLM_API_KEY")
     if api_key is None:
         api_key = resolve_provider_specific_env(provider, "API_KEY")
     if api_key is None:
-        api_key = resolve_env_value("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+        api_key = resolve_env_value(
+            "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY"
+        )
 
-    if model is None:
-        return None
-
-    server_name = resolve_env_value("LLM_SERVER_NAME") or "cppl_env"
-    return LLMServerOverride(
-        server_name=server_name,
-        model=model,
+    return LLMModelConfig(
         provider=provider,
+        model=model,
         base_url=base_url,
         api_key=api_key,
     )
@@ -167,37 +185,3 @@ def resolve_llm_generation_kwargs() -> dict[str, Any]:
         kwargs["max_tokens"] = int(max_tokens)
 
     return kwargs
-
-
-def apply_server_override(configs: object, override: LLMServerOverride) -> str:
-    """Inject the .env-resolved server into APPL config objects.
-
-    Returns the actual target server name that was updated.
-    """
-    servers = getattr(configs, "servers", None)
-    if servers is None:
-        servers = {}
-        setattr(configs, "servers", servers)
-    if not isinstance(servers, dict):
-        raise TypeError("APPL configs.servers must be a dictionary")
-
-    default_servers = getattr(configs, "default_servers", None)
-    target_name = override.server_name
-
-    if default_servers is None:
-        default_servers = SimpleNamespace()
-        setattr(configs, "default_servers", default_servers)
-    if isinstance(default_servers, dict):
-        default_servers["default"] = target_name
-    else:
-        setattr(default_servers, "default", target_name)
-
-    server_cfg: dict[str, Any] = {"model": override.model}
-    if override.provider:
-        server_cfg["provider"] = override.provider
-    if override.base_url:
-        server_cfg["base_url"] = override.base_url
-    if override.api_key:
-        server_cfg["api_key"] = override.api_key
-    servers[target_name] = server_cfg
-    return target_name

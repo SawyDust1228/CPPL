@@ -1,3 +1,6 @@
-applang==0.2.2
+langchain-core>=1,<2
+langchain-openai>=1,<2
+langchain-anthropic>=1,<2
+langgraph>=1,<2
 pycde==0.9.1.dev146
 termcolor<3

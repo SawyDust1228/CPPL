@@ -46,6 +46,7 @@ class AgentConfig:
     cache_enabled: Optional[bool] = None
     cache_dir: Optional[str | Path] = None
     fail_fast: Optional[bool] = None
+    log_enabled: Optional[bool] = None
     transport_retries: Optional[int] = None
     request_timeout: Optional[float] = None
     generation_kwargs: Optional[dict[str, Any]] = None
@@ -106,6 +107,11 @@ class AgentConfig:
                 if self.fail_fast is not None
                 else env_bool("CPPL_AGENT_FAIL_FAST", True)
             ),
+            log_enabled=(
+                self.log_enabled
+                if self.log_enabled is not None
+                else env_bool("CPPL_AGENT_LOG_ENABLED", True)
+            ),
             transport_retries=(
                 self.transport_retries
                 if self.transport_retries is not None
@@ -127,6 +133,7 @@ class ResolvedAgentConfig:
     cache_enabled: bool
     cache_dir: Path
     fail_fast: bool
+    log_enabled: bool
     transport_retries: int
     request_timeout: float
     generation_kwargs: dict[str, Any] = field(default_factory=dict)
