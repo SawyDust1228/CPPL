@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .context import IR_VERSION, PROMPT_VERSION
-from .models import ResolvedAgentConfig
+from .models import CompiledModuleArtifact, ResolvedAgentConfig
 from ..frontend.module import ModuleDef
 from ..frontend.patterns import pattern_as_dict
 from ..ir.errors import CircuitPPLError
@@ -78,6 +78,45 @@ class ModuleCache:
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def interface_hash(module_dict: dict) -> str:
+        encoded = json.dumps(
+            module_dict.get("ports", {}), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @classmethod
+    def artifact_for(
+        cls,
+        module_dict: dict,
+        dependency_artifacts: list[CompiledModuleArtifact] | None = None,
+        *,
+        patterns_checked: int = 0,
+    ) -> CompiledModuleArtifact:
+        dependency_hashes = tuple(
+            sorted(
+                (artifact.module_name, artifact.semantic_hash)
+                for artifact in dependency_artifacts or []
+            )
+        )
+        encoded = json.dumps(
+            {
+                "module": module_dict,
+                "dependency_hashes": dependency_hashes,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return CompiledModuleArtifact(
+            module_name=module_dict["name"],
+            semantic_hash=hashlib.sha256(encoded).hexdigest(),
+            interface_hash=cls.interface_hash(module_dict),
+            dependency_hashes=dependency_hashes,
+            patterns_checked=patterns_checked,
+            module_dict=module_dict,
+        )
 
     def cache_path(self, key: str) -> Path:
         return self.cache_dir / key[:2] / f"{key}.json"

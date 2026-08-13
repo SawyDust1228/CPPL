@@ -20,6 +20,37 @@ from cppl.ir.parser import parse_design
 
 
 class TestParseDesign:
+    def test_collects_errors_across_modules_and_operations(self):
+        raw = [
+            {
+                "name": "First",
+                "ports": {
+                    "1": {"dir": "input", "width": 1},
+                    "bad_width": {"dir": "output", "width": 0},
+                },
+                "body": [
+                    {"id": "sum", "op": "add", "args": ["a"]},
+                    {"op": "unknown"},
+                ],
+            },
+            {
+                "name": "Second",
+                "ports": {"x": {"dir": "sideways", "width": 1}},
+                "body": "not-an-array",
+            },
+        ]
+        with pytest.raises(ParseError) as error:
+            parse_design(raw)
+
+        assert len(error.value.issues) == 6
+        message = str(error.value)
+        assert "port '1'" in message
+        assert "bad_width" in message
+        assert "exactly 2" in message
+        assert "unknown op" in message
+        assert "sideways" in message
+        assert "body" in message
+
     def test_single_module_dict(self):
         """A single module dict (not wrapped in array) should work."""
         raw = '{"name":"A","ports":{"x":{"dir":"input","width":1}},"body":[{"op":"output","args":{}}]}'
@@ -56,6 +87,13 @@ class TestParseDesign:
                 '{"name":"A","ports":{"x":{"dir":"input","width":0}},"body":[]}'
             )
 
+    def test_numeric_port_name_is_rejected(self):
+        with pytest.raises(ParseError, match="SSA identifier"):
+            parse_design(
+                '{"name":"A","ports":{"1":{"dir":"input","width":1}},'
+                '"body":[{"op":"output","args":{}}]}'
+            )
+
     def test_unknown_op(self):
         raw = '{"name":"A","ports":{"x":{"dir":"input","width":1}},"body":[{"op":"foobar"}]}'
         with pytest.raises(ParseError, match="unknown op"):
@@ -74,6 +112,20 @@ class TestParseOperations:
         assert isinstance(mod.body[0], ConstantOp)
         assert mod.body[0].value == 42
         assert mod.body[0].width == 8
+
+    def test_numeric_ssa_id_is_rejected(self):
+        with pytest.raises(ParseError, match="SSA identifier"):
+            self.parse_test_module(
+                '{"id":"300","op":"constant","value":0,"width":8},'
+                '{"op":"output","args":{"out":"300"}}'
+            )
+
+    def test_ssa_id_must_start_with_letter_or_underscore(self):
+        with pytest.raises(ParseError, match="SSA identifier"):
+            self.parse_test_module(
+                '{"id":"9value","op":"constant","value":0,"width":8},'
+                '{"op":"output","args":{"out":"9value"}}'
+            )
 
     def test_constant_hex_string(self):
         mod = self.parse_test_module(
@@ -137,6 +189,19 @@ class TestParseOperations:
         assert isinstance(inst, InstanceOp)
         assert inst.module == "Sub"
         assert inst.id == ["r"]
+
+    def test_numeric_instance_output_id_is_rejected(self):
+        raw = """[
+          {"name":"Sub","ports":{"i":{"dir":"input","width":8},"o":{"dir":"output","width":8}},
+           "body":[{"op":"output","args":{"o":"i"}}]},
+          {"name":"Top","ports":{"a":{"dir":"input","width":8},"out":{"dir":"output","width":8}},
+           "body":[
+             {"id":["1"],"op":"instance","module":"Sub","args":{"i":"a"}},
+             {"op":"output","args":{"out":"1"}}
+           ]}
+        ]"""
+        with pytest.raises(ParseError, match="SSA identifier"):
+            parse_design(raw)
 
     def test_output(self):
         mod = self.parse_test_module('{"op":"output","args":{"out":"a"}}')
@@ -230,6 +295,19 @@ class TestParseOperations:
 
 
 class TestParseMem:
+    def test_numeric_memory_output_id_is_rejected(self):
+        raw = """{
+          "name":"M",
+          "ports":{"clk":{"dir":"input","width":1},"o":{"dir":"output","width":8}},
+          "body":[
+            {"id":["1"],"op":"mem","width":8,"depth":1,"clock":"clk",
+             "reads":[{"addr":"0","enable":"1"}],"writes":[]},
+            {"op":"output","args":{"o":"1"}}
+          ]
+        }"""
+        with pytest.raises(ParseError, match="SSA identifier"):
+            parse_design(raw)
+
     def test_mem_op(self):
         raw = """{
           "name":"M",

@@ -9,7 +9,7 @@ from .ir.parser import parse_design
 from .ir.validator import validate_design
 from .ir.infer import infer_widths
 
-from .agents.models import AgentConfig, CompilationReport
+from .agents.models import AgentConfig, CompileOptions, CompilationReport
 from .frontend.compiler import CompilationError, compile_modules_with_report
 from .frontend.module import ModuleDef
 from .harness import CompileObserver
@@ -63,6 +63,7 @@ class Design:
         max_retries: int = 3,
         *,
         observer: CompileObserver | None = None,
+        options: CompileOptions | None = None,
     ) -> List[dict]:
         """Compile every module via the LLM and return validated JSON-IR dicts."""
         if self._compiled is not None:
@@ -71,6 +72,7 @@ class Design:
         report = self.compile_with_report(
             max_retries=max_retries,
             observer=observer,
+            options=options,
         )
         if not report.success:
             raise CompilationError(report.design_error or "unknown compilation error")
@@ -81,17 +83,20 @@ class Design:
         max_retries: int = 3,
         *,
         observer: CompileObserver | None = None,
+        options: CompileOptions | None = None,
     ) -> CompilationReport:
         """Compile the design and return detailed agent/runtime metadata."""
         if self._compiled is not None and self.last_compile_report is not None:
             return self.last_compile_report
 
-        report = compile_modules_with_report(
-            self._modules,
-            max_retries=max_retries,
-            agent_config=self.agent_config,
-            observer=observer if observer is not None else self.observer,
-        )
+        compile_kwargs = {
+            "max_retries": max_retries,
+            "agent_config": self.agent_config,
+            "observer": observer if observer is not None else self.observer,
+        }
+        if options is not None:
+            compile_kwargs["options"] = options
+        report = compile_modules_with_report(self._modules, **compile_kwargs)
         self.last_compile_report = report
         if report.success:
             self._compiled = report.modules
@@ -102,10 +107,11 @@ class Design:
         max_retries: int = 3,
         *,
         observer: CompileObserver | None = None,
+        options: CompileOptions | None = None,
     ) -> str:
         """Return the compiled design as a pretty-printed JSON string."""
         return json.dumps(
-            self.compile(max_retries=max_retries, observer=observer), indent=2
+            self.compile(max_retries=max_retries, observer=observer, options=options), indent=2
         )
 
     def run_ir_pipeline(
@@ -113,9 +119,12 @@ class Design:
         max_retries: int = 5,
         *,
         observer: CompileObserver | None = None,
+        options: CompileOptions | None = None,
     ):
         """Run parse → validate → infer and return (modules, widths)."""
-        modules_json = self.compile(max_retries=max_retries, observer=observer)
+        modules_json = self.compile(
+            max_retries=max_retries, observer=observer, options=options
+        )
         modules = parse_design(json.dumps(modules_json))
         validate_design(modules)
         widths = infer_widths(modules)
@@ -127,6 +136,7 @@ class Design:
         max_retries: int = 3,
         *,
         observer: CompileObserver | None = None,
+        options: CompileOptions | None = None,
     ) -> str:
         """Compile and generate MLIR text."""
         from .codegen.circt import generate_mlir
@@ -134,6 +144,8 @@ class Design:
         pipeline_kwargs = {"max_retries": max_retries}
         if observer is not None:
             pipeline_kwargs["observer"] = observer
+        if options is not None:
+            pipeline_kwargs["options"] = options
         modules, widths = self.run_ir_pipeline(**pipeline_kwargs)
         return generate_mlir(modules, widths, top=top)
 
@@ -144,6 +156,7 @@ class Design:
         optimize: bool = True,
         *,
         observer: CompileObserver | None = None,
+        options: CompileOptions | None = None,
     ) -> str:
         """Compile and generate Verilog text."""
         from .codegen.circt import generate_verilog
@@ -151,6 +164,8 @@ class Design:
         pipeline_kwargs = {"max_retries": max_retries}
         if observer is not None:
             pipeline_kwargs["observer"] = observer
+        if options is not None:
+            pipeline_kwargs["options"] = options
         modules, widths = self.run_ir_pipeline(**pipeline_kwargs)
         return generate_verilog(modules, widths, top=top, optimize=optimize)
 
@@ -160,6 +175,7 @@ class Design:
         max_retries: int = 3,
         *,
         observer: CompileObserver | None = None,
+        options: CompileOptions | None = None,
     ) -> "Interpreter":
         """Compile the design and return a stateful IR interpreter."""
         from .ir.interpreter import Interpreter
@@ -167,5 +183,7 @@ class Design:
         pipeline_kwargs = {"max_retries": max_retries}
         if observer is not None:
             pipeline_kwargs["observer"] = observer
+        if options is not None:
+            pipeline_kwargs["options"] = options
         modules, widths = self.run_ir_pipeline(**pipeline_kwargs)
         return Interpreter(modules, widths=widths, top=top)

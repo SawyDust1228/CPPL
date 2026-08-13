@@ -1,7 +1,44 @@
-from cppl import module, In, Out, Clock, Design
+from cppl import (
+    AgentConfig,
+    Case,
+    Clock,
+    CompileOptions,
+    Design,
+    In,
+    MemoryFixture,
+    Out,
+    Sequence,
+    Step,
+    module,
+)
 
 
-@module
+@module(
+    patterns=[
+        Sequence(
+            name="reset_write_and_x0",
+            steps=[
+                Step(
+                    inputs={
+                        "clk": 0,
+                        "rst": 1,
+                        "A1": 0,
+                        "A2": 1,
+                        "A3": 1,
+                        "WD": 0x12345678,
+                        "WE": 1,
+                    },
+                    outputs={"RD1": 0, "RD2": 0},
+                ),
+                Step(inputs={"clk": 1}, outputs={"RD1": 0, "RD2": 0}),
+                Step(inputs={"clk": 0, "rst": 0}),
+                Step(inputs={"clk": 1}, outputs={"RD1": 0, "RD2": 0x12345678}),
+                Step(inputs={"clk": 0, "A3": 0, "WD": 0xFFFFFFFF}),
+                Step(inputs={"clk": 1}, outputs={"RD1": 0, "RD2": 0x12345678}),
+            ],
+        )
+    ]
+)
 def reg_file(
     clk: Clock,
     rst: In[1],
@@ -22,7 +59,24 @@ def reg_file(
     pass
 
 
-@module
+@module(
+    patterns=[
+        Sequence(
+            name="reset_increment_and_jump",
+            steps=[
+                Step(
+                    inputs={"clk": 0, "rst": 1, "JUMP": 0, "JUMP_PC": 0},
+                    outputs={"pc": 0},
+                ),
+                Step(inputs={"clk": 1}, outputs={"pc": 0}),
+                Step(inputs={"clk": 0, "rst": 0}),
+                Step(inputs={"clk": 1}, outputs={"pc": 4}),
+                Step(inputs={"clk": 0, "JUMP": 1, "JUMP_PC": 0x100}),
+                Step(inputs={"clk": 1}, outputs={"pc": 0x100}),
+            ],
+        )
+    ]
+)
 def pc(clk: Clock, rst: In[1], JUMP: In[1], JUMP_PC: In[32]) -> {"pc": Out[32]}:
     """Implement the program counter register.
 
@@ -34,7 +88,16 @@ def pc(clk: Clock, rst: In[1], JUMP: In[1], JUMP_PC: In[32]) -> {"pc": Out[32]}:
     pass
 
 
-@module
+@module(
+    patterns=[
+        Case(name="addi_negative", inputs={"inst": 0xFFC10093}, outputs={"out": 0xFFFFFFFC}),
+        Case(name="store_negative", inputs={"inst": 0xFE312C23}, outputs={"out": 0xFFFFFFF8}),
+        Case(name="branch_negative", inputs={"inst": 0xFE2088E3}, outputs={"out": 0xFFFFFFF0}),
+        Case(name="lui_upper", inputs={"inst": 0xABCDE0B7}, outputs={"out": 0xABCDE000}),
+        Case(name="jal_positive", inputs={"inst": 0x014000EF}, outputs={"out": 20}),
+        Case(name="unsupported", inputs={"inst": 0}, outputs={"out": 0}),
+    ]
+)
 def imm(inst: In[32]) -> {"out": Out[32]}:
     """Generate the RV32I immediate value for inst.
 
@@ -51,7 +114,17 @@ def imm(inst: In[32]) -> {"out": Out[32]}:
     pass
 
 
-@module
+@module(
+    patterns=[
+        Case(name="disabled", inputs={"REG1": 7, "REG2": 7, "Type": 0}, outputs={"BrE": 0}),
+        Case(name="beq_taken", inputs={"REG1": 7, "REG2": 7, "Type": 1}, outputs={"BrE": 1}),
+        Case(name="bne_taken", inputs={"REG1": 7, "REG2": 8, "Type": 2}, outputs={"BrE": 1}),
+        Case(name="blt_signed", inputs={"REG1": 0xFFFFFFFF, "REG2": 1, "Type": 3}, outputs={"BrE": 1}),
+        Case(name="bge_signed", inputs={"REG1": 1, "REG2": 0xFFFFFFFF, "Type": 4}, outputs={"BrE": 1}),
+        Case(name="bltu_false", inputs={"REG1": 0xFFFFFFFF, "REG2": 1, "Type": 5}, outputs={"BrE": 0}),
+        Case(name="bgeu_taken", inputs={"REG1": 0xFFFFFFFF, "REG2": 1, "Type": 6}, outputs={"BrE": 1}),
+    ]
+)
 def branch(REG1: In[32], REG2: In[32], Type: In[3]) -> {"BrE": Out[1]}:
     """Compute a branch decision.
 
@@ -68,7 +141,22 @@ def branch(REG1: In[32], REG2: In[32], Type: In[3]) -> {"BrE": Out[1]}:
     pass
 
 
-@module
+@module(
+    patterns=[
+        Case(name="add_wrap", inputs={"SrcA": 0xFFFFFFFF, "SrcB": 1, "func": 0x0}, outputs={"ALUout": 0}),
+        Case(name="subtract", inputs={"SrcA": 9, "SrcB": 4, "func": 0x8}, outputs={"ALUout": 5}),
+        Case(name="shift_left_masked", inputs={"SrcA": 3, "SrcB": 35, "func": 0x1}, outputs={"ALUout": 24}),
+        Case(name="shift_right_logical", inputs={"SrcA": 0x80000000, "SrcB": 4, "func": 0x5}, outputs={"ALUout": 0x08000000}),
+        Case(name="shift_right_arithmetic", inputs={"SrcA": 0x80000000, "SrcB": 4, "func": 0xD}, outputs={"ALUout": 0xF8000000}),
+        Case(name="signed_less_than", inputs={"SrcA": 0xFFFFFFFF, "SrcB": 1, "func": 0x2}, outputs={"ALUout": 1}),
+        Case(name="unsigned_less_than", inputs={"SrcA": 1, "SrcB": 0xFFFFFFFF, "func": 0x3}, outputs={"ALUout": 1}),
+        Case(name="xor", inputs={"SrcA": 0xAA55AA55, "SrcB": 0x0F0F0F0F, "func": 0x4}, outputs={"ALUout": 0xA55AA55A}),
+        Case(name="or", inputs={"SrcA": 0xA0000005, "SrcB": 0x050000A0, "func": 0x6}, outputs={"ALUout": 0xA50000A5}),
+        Case(name="and", inputs={"SrcA": 0xFF00FF00, "SrcB": 0x0F0F0F0F, "func": 0x7}, outputs={"ALUout": 0x0F000F00}),
+        Case(name="pass_b", inputs={"SrcA": 0, "SrcB": 0xDEADBEEF, "func": 0xE}, outputs={"ALUout": 0xDEADBEEF}),
+        Case(name="default_zero", inputs={"SrcA": 1, "SrcB": 2, "func": 0xF}, outputs={"ALUout": 0}),
+    ]
+)
 def alu(SrcA: In[32], SrcB: In[32], func: In[4]) -> {"ALUout": Out[32]}:
     """Implement the RV32I ALU.
 
@@ -85,11 +173,66 @@ def alu(SrcA: In[32], SrcB: In[32], func: In[4]) -> {"ALUout": Out[32]}:
     - 0111: and
     - 1110: pass SrcB
     Default output is zero.
+
+    The lt_s and lt_u comparison operations produce a 1-bit result. Zero-extend
+    that result to 32 bits before selecting it as ALUout. Every mux true/false
+    pair must have identical widths, and every func decoder condition used as a
+    mux selector must be a separate 1-bit equality result.
     """
     pass
 
 
-@module
+@module(
+    patterns=[
+        Case(
+            name="instruction_and_word_load",
+            inputs={
+                "clk": 0,
+                "im_addr": 0,
+                "dm_rd_ctrl": 5,
+                "dm_wr_ctrl": 0,
+                "dm_addr": 0,
+                "dm_din": 0,
+            },
+            outputs={"im_dout": 0x80FF7F01, "dm_dout": 0x80FF7F01},
+            fixtures=[MemoryFixture("mem", {0: 0x80FF7F01})],
+        ),
+        Case(
+            name="signed_byte_load",
+            inputs={
+                "clk": 0,
+                "im_addr": 0,
+                "dm_rd_ctrl": 1,
+                "dm_wr_ctrl": 0,
+                "dm_addr": 3,
+                "dm_din": 0,
+            },
+            outputs={"dm_dout": 0xFFFFFF80},
+            fixtures=[MemoryFixture("mem", {0: 0x80FF7F01})],
+        ),
+        Sequence(
+            name="full_word_store",
+            fixtures=[MemoryFixture("mem", {0: 0})],
+            steps=[
+                Step(
+                    inputs={
+                        "clk": 0,
+                        "im_addr": 0,
+                        "dm_rd_ctrl": 0,
+                        "dm_wr_ctrl": 3,
+                        "dm_addr": 0,
+                        "dm_din": 0x12345678,
+                    },
+                    outputs={"dm_dout": 0},
+                ),
+                Step(
+                    inputs={"clk": 1},
+                    probes={"mem[0]": 0x12345678},
+                ),
+            ],
+        ),
+    ]
+)
 def mem(
     clk: Clock,
     im_addr: In[32],
@@ -127,7 +270,22 @@ def mem(
     pass
 
 
-@module
+@module(
+    patterns=[
+        Case(name="lui", inputs={"inst": 0xABCDE0B7}, outputs={"rf_wr_en": 1, "rf_wr_sel": 0}),
+        Case(name="auipc", inputs={"inst": 0x12345097}, outputs={"rf_wr_en": 1, "rf_wr_sel": 2, "alu_a_sel": 0, "alu_b_sel": 1, "alu_ctrl": 0}),
+        Case(name="jal", inputs={"inst": 0x014000EF}, outputs={"rf_wr_en": 1, "rf_wr_sel": 1, "do_jump": 1, "alu_a_sel": 0, "alu_b_sel": 1, "alu_ctrl": 0}),
+        Case(name="jalr", inputs={"inst": 0x008100E7}, outputs={"rf_wr_en": 1, "rf_wr_sel": 1, "do_jump": 1, "alu_a_sel": 1, "alu_b_sel": 1, "alu_ctrl": 0}),
+        Case(name="beq", inputs={"inst": 0xFE2088E3}, outputs={"rf_wr_en": 0, "do_jump": 0, "BrType": 1, "alu_a_sel": 0, "alu_b_sel": 1, "alu_ctrl": 0}),
+        Case(name="bltu", inputs={"inst": 0x0020E663}, outputs={"rf_wr_en": 0, "BrType": 5}),
+        Case(name="lw", inputs={"inst": 0x00C12083}, outputs={"rf_wr_en": 1, "rf_wr_sel": 3, "alu_a_sel": 1, "alu_b_sel": 1, "alu_ctrl": 0, "dm_rd_ctrl": 5, "dm_wr_ctrl": 0}),
+        Case(name="sw", inputs={"inst": 0xFE312C23}, outputs={"rf_wr_en": 0, "alu_a_sel": 1, "alu_b_sel": 1, "alu_ctrl": 0, "dm_rd_ctrl": 0, "dm_wr_ctrl": 3}),
+        Case(name="addi", inputs={"inst": 0xFFC10093}, outputs={"rf_wr_en": 1, "rf_wr_sel": 2, "alu_a_sel": 1, "alu_b_sel": 1, "alu_ctrl": 0}),
+        Case(name="sub", inputs={"inst": 0x403100B3}, outputs={"rf_wr_en": 1, "rf_wr_sel": 2, "alu_a_sel": 1, "alu_b_sel": 0, "alu_ctrl": 8}),
+        Case(name="srai", inputs={"inst": 0x40315093}, outputs={"rf_wr_en": 1, "rf_wr_sel": 2, "alu_a_sel": 1, "alu_b_sel": 1, "alu_ctrl": 13}),
+        Case(name="and", inputs={"inst": 0x003170B3}, outputs={"rf_wr_en": 1, "rf_wr_sel": 2, "alu_a_sel": 1, "alu_b_sel": 0, "alu_ctrl": 7}),
+    ]
+)
 def ctrl(inst: In[32]) -> {
     "rf_wr_en": Out[1],
     "rf_wr_sel": Out[2],
@@ -162,7 +320,50 @@ def ctrl(inst: In[32]) -> {
     pass
 
 
-@module
+@module(
+    patterns=[
+        Sequence(
+            name="execute_arithmetic_and_store_program",
+            fixtures=[
+                MemoryFixture(
+                    "mem0.mem",
+                    {
+                        0: 0x00500093,  # addi x1, x0, 5
+                        1: 0x00308113,  # addi x2, x1, 3
+                        2: 0x00202023,  # sw x2, 0(x0)
+                        3: 0x0000006F,  # jal x0, 0
+                    },
+                )
+            ],
+            steps=[
+                Step(
+                    inputs={"clk": 0, "rst": 1},
+                    probes={"pc0.pc": 0, "reg_file0.reg_file[0]": 0},
+                ),
+                Step(inputs={"clk": 1}, probes={"pc0.pc": 0}),
+                Step(inputs={"clk": 0, "rst": 0}),
+                Step(
+                    inputs={"clk": 1},
+                    probes={"pc0.pc": 4, "reg_file0.reg_file[1]": 5},
+                ),
+                Step(inputs={"clk": 0}),
+                Step(
+                    inputs={"clk": 1},
+                    probes={"pc0.pc": 8, "reg_file0.reg_file[2]": 8},
+                ),
+                Step(inputs={"clk": 0}),
+                Step(
+                    inputs={"clk": 1},
+                    probes={
+                        "pc0.pc": 12,
+                        "reg_file0.reg_file[0]": 0,
+                        "mem0.mem[0]": 8,
+                    },
+                ),
+            ],
+        )
+    ]
+)
 def CPU(clk: Clock, rst: In[1]) -> {}:
     reg_file0 = reg_file(
         clk=clk,
@@ -215,11 +416,23 @@ def CPU(clk: Clock, rst: In[1]) -> {}:
     """
 
 
-design = Design()
+design = Design(
+    agent_config=AgentConfig(
+        max_parallelism=2,
+        fail_fast=False,
+        request_timeout=180,
+        module_deadline_seconds=900,
+        max_module_tokens=120000,
+    )
+)
 design.add(CPU)
 
 
 if __name__ == "__main__":
-    cpu_sv = design.to_verilog(top="CPU")
+    cpu_sv = design.to_verilog(
+        top="CPU",
+        max_retries=5,
+        options=CompileOptions(run_id="rv32i-cpu", resume=True),
+    )
     with open("cpu.sv", "w") as f:
         f.write(cpu_sv)

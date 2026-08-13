@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from cppl import Case, In, Out, Sequence, Step, module
+from cppl import Case, In, MemoryFixture, Out, Sequence, Step, module
 from cppl.agents.backend import BackendResponse
-from cppl.agents.models import AgentConfig
+from cppl.agents.models import AgentConfig, CompileOptions
 from cppl.agents.runtime import CompilationCoordinator
 from cppl.agents.cache import ModuleCache
 from cppl.frontend.patterns import pattern_as_dict
@@ -163,8 +163,134 @@ class TestPatternRunner:
         assert "expected={'out': 3}" in message
         assert "actual={'out': 2}" in message
 
+    def test_collects_failures_from_multiple_cases(self):
+        modules = parse_design(
+            [
+                {
+                    "name": "M",
+                    "ports": {
+                        "a": {"dir": "input", "width": 8},
+                        "out": {"dir": "output", "width": 8},
+                    },
+                    "body": [{"op": "output", "args": {"out": "a"}}],
+                }
+            ]
+        )
+        with pytest.raises(PatternMismatch) as error:
+            run_patterns(
+                modules,
+                "M",
+                [
+                    Case({"a": 1}, {"out": 2}, name="first"),
+                    Case({"a": 3}, {"out": 4}, name="second"),
+                ],
+            )
+
+        assert len(error.value.issues) == 2
+        assert "first" in str(error.value)
+        assert "second" in str(error.value)
+
+    def test_probe_and_memory_fixture_support_outputless_top(self):
+        modules = parse_design(
+            [
+                {
+                    "name": "Top",
+                    "ports": {"clk": {"dir": "input", "width": 1}},
+                    "body": [
+                        {
+                            "id": [],
+                            "op": "mem",
+                            "width": 8,
+                            "depth": 4,
+                            "clock": "clk",
+                            "name": "storage",
+                            "reads": [],
+                            "writes": [],
+                        },
+                        {"op": "output", "args": {}},
+                    ],
+                }
+            ]
+        )
+        patterns = [
+            Case(
+                name="fixture_probe",
+                inputs={"clk": 0},
+                outputs={},
+                probes={"storage[2]": 0x5A},
+                fixtures=[MemoryFixture("storage", {2: 0x5A})],
+            )
+        ]
+        assert run_patterns(modules, "Top", patterns) == 1
+
+    def test_validated_module_is_cached_before_design_failure(self, tmp_path):
+        @module
+        def Good(a: In[8]) -> Out[8]:
+            """out equals a."""
+            pass
+
+        @module
+        def Bad(a: In[8]) -> Out[8]:
+            """out equals a plus one."""
+            pass
+
+        FakeBackend.responses = [
+            json.dumps([{"op": "output", "args": {"out": "a"}}]),
+            json.dumps([{"op": "output", "args": {"out": "missing"}}]),
+            json.dumps([{"op": "output", "args": {"out": "missing"}}]),
+            json.dumps([{"op": "output", "args": {"out": "missing"}}]),
+        ]
+        first = CompilationCoordinator(
+            agent_test_config(tmp_path),
+            backend_factory=FakeBackend,
+            model_identity={"model": "fake"},
+        ).compile([Bad, Good])
+        assert not first.success
+        assert first.module_reports["Bad"].cache_committed
+
+        FakeBackend.responses = [
+            json.dumps([{"op": "output", "args": {"out": "a"}}])
+        ]
+        second = CompilationCoordinator(
+            agent_test_config(tmp_path),
+            backend_factory=FakeBackend,
+            model_identity={"model": "fake"},
+        ).compile([Bad])
+        assert second.success
+        assert second.module_reports["Bad"].cache_hit
+        assert FakeBackend.responses
+
 
 class TestCompilePatternLoop:
+    def test_single_output_name_mismatch_requires_explicit_repair(self, tmp_path):
+        @module(patterns=[Case({"a": 1}, {"BrE": 1})])
+        def Branch(a: In[1]) -> {"BrE": Out[1]}:
+            """BrE equals a."""
+            pass
+
+        FakeBackend.responses = [
+            json.dumps([{"op": "output", "args": {"out": "a"}}]),
+            json.dumps([{"op": "output", "args": {"BrE": "a"}}]),
+        ]
+        report = CompilationCoordinator(
+            agent_test_config(tmp_path),
+            backend_factory=FakeBackend,
+            model_identity={"model": "fake"},
+        ).compile([Branch], max_retries=2)
+
+        assert report.success
+        assert report.module_reports["Branch"].attempts == 2
+        repair = FakeBackend.prompts[1]
+        assert repair["diagnostic"]["details"]["issue_count"] == 1
+        issue = repair["diagnostic"]["details"]["issues"][0]
+        assert issue["expected"] == ["BrE"]
+        assert issue["actual"] == ["out"]
+        assert "No automatic renaming" in issue["hint"]
+        assert report.modules[0]["body"][-1] == {
+            "op": "output",
+            "args": {"BrE": "a"},
+        }
+
     def test_mismatch_is_repaired_and_patterns_are_in_prompt(self, tmp_path):
         @module(patterns=[Case({"a": 2}, {"out": 3}, name="plus_one")])
         def M(a: In[8]) -> Out[8]:
@@ -191,6 +317,11 @@ class TestCompilePatternLoop:
         assert report.module_reports["M"].attempts == 2
         assert report.module_reports["M"].patterns_checked == 1
         assert FakeBackend.prompts[0]["patterns"][0]["name"] == "plus_one"
+        assert "output_contract" not in FakeBackend.prompts[0]
+        assert any(
+            "names already listed in ports" in rule
+            for rule in FakeBackend.prompts[1]["rules"]
+        )
         assert any(
             "steps share state" in rule for rule in FakeBackend.prompts[0]["rules"]
         )
@@ -334,3 +465,39 @@ class TestCompilePatternLoop:
         assert module_report.error_category == "PatternDependencyMissing"
         assert "External" in module_report.error
         assert FakeBackend.prompts == []
+
+    def test_sqlite_run_resume_reuses_validated_module(self, tmp_path):
+        @module
+        def M(a: In[8]) -> Out[8]:
+            """out equals a."""
+            pass
+
+        config = AgentConfig(
+            cache_dir=tmp_path / "cache",
+            checkpoint_path=tmp_path / "checkpoints.sqlite3",
+            cache_enabled=True,
+            checkpoint_enabled=True,
+            max_parallelism=1,
+            context_window_tokens=8192,
+            output_tokens=2048,
+            safety_margin_tokens=512,
+        )
+        FakeBackend.responses = [
+            json.dumps([{"op": "output", "args": {"out": "a"}}])
+        ]
+        first = CompilationCoordinator(
+            config,
+            backend_factory=FakeBackend,
+            model_identity={"model": "fake"},
+        ).compile([M], options=CompileOptions(run_id="resume-test"))
+        assert first.success
+
+        second = CompilationCoordinator(
+            config,
+            backend_factory=FakeBackend,
+            model_identity={"model": "fake"},
+        ).compile([M], options=CompileOptions(run_id="resume-test", resume=True))
+        assert second.success
+        assert second.resumed_modules == 1
+        assert second.module_reports["M"].resumed
+        assert FakeBackend.responses == []

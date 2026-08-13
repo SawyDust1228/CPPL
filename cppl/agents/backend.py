@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+import json
 from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -13,6 +14,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 
 from .models import AgentRuntimeError, ResolvedAgentConfig
+from ..harness.schema import ModuleBodySchema
 from ..env import LLMModelConfig, resolve_llm_model_config
 
 
@@ -113,6 +115,7 @@ class LangChainBackend:
                 )
             chat_model = create_chat_model(self.settings)
         self.chat_model = chat_model
+        self._structured_supported: bool | None = None
 
     @staticmethod
     def model_identity() -> dict[str, Any]:
@@ -160,3 +163,69 @@ class LangChainBackend:
         if not isinstance(text, str) or not text.strip():
             raise LLMBackendError("LangChain returned an empty text response.")
         return BackendResponse(text=text, transport_retries=max(counter.attempts - 1, 0))
+
+    def generate_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        output_tokens: int | None = None,
+    ) -> BackendResponse:
+        """Use provider-native structured output when the integration supports it."""
+        if self._structured_supported is False:
+            return self.generate(
+                system_prompt, user_prompt, output_tokens=output_tokens
+            )
+        counter = _RetryCounter()
+        kwargs = {
+            "max_tokens": output_tokens or self.config.output_tokens,
+            "timeout": self.config.request_timeout,
+            **self.config.generation_kwargs,
+        }
+        try:
+            model = self.chat_model.bind(**kwargs).with_structured_output(ModuleBodySchema)
+            chain = (self._prompt | model).with_retry(
+                stop_after_attempt=self.config.transport_retries + 1,
+                wait_exponential_jitter=True,
+            )
+            value = chain.invoke(
+                {"system_prompt": system_prompt, "user_prompt": user_prompt},
+                config={"callbacks": [counter]},
+            )
+            if isinstance(value, ModuleBodySchema):
+                payload = value.model_dump(mode="json", exclude_none=True)
+            elif isinstance(value, dict) and "root" in value:
+                payload = value["root"]
+            else:
+                payload = value
+            self._structured_supported = True
+            return BackendResponse(
+                text=json.dumps(payload, separators=(",", ":")),
+                transport_retries=max(counter.attempts - 1, 0),
+            )
+        except (NotImplementedError, AttributeError, TypeError):
+            self._structured_supported = False
+            return self.generate(
+                system_prompt, user_prompt, output_tokens=output_tokens
+            )
+        except Exception as exc:
+            message = str(exc).lower()
+            if any(
+                marker in message
+                for marker in (
+                    "invalid schema",
+                    "response_format",
+                    "json_schema",
+                    "structured output is not supported",
+                    "does not support structured",
+                )
+            ):
+                self._structured_supported = False
+                return self.generate(
+                    system_prompt, user_prompt, output_tokens=output_tokens
+                )
+            raise LLMBackendError(
+                "Structured LLM request failed after "
+                f"{max(counter.attempts, 1)} transport attempt(s): "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc

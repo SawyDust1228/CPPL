@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from ..agents.models import (
     AgentConfig,
+    CompileOptions,
     CompilationReport,
     ModuleCompileReport,
 )
@@ -44,13 +45,20 @@ class CompilerSession:
         self.observer = observer
         self.last_report: CompilationReport | None = None
 
-    def compile(self, mod: ModuleDef, max_retries: int = 3) -> dict:
+    def compile(
+        self,
+        mod: ModuleDef,
+        max_retries: int = 3,
+        *,
+        options: CompileOptions | None = None,
+    ) -> dict:
         report = CompilationCoordinator(
             self.agent_config,
             observer=self.observer,
         ).compile(
             [mod],
             max_retries=max_retries,
+            options=options,
         )
         self.last_report = report
         module_report = report.module_reports[mod.name]
@@ -79,12 +87,14 @@ def compile_module(
     agent_config: AgentConfig | None = None,
     *,
     observer: CompileObserver | None = None,
+    options: CompileOptions | None = None,
 ) -> CompileResult:
     """Compile one module using the LangGraph Generator/Repair workflow."""
     try:
         report = CompilationCoordinator(agent_config, observer=observer).compile(
             [mod],
             max_retries=max_retries,
+            options=options,
         )
         return result_from_report(report.module_reports[mod.name])
     except Exception as exc:
@@ -101,11 +111,13 @@ def compile_modules_with_report(
     agent_config: AgentConfig | None = None,
     *,
     observer: CompileObserver | None = None,
+    options: CompileOptions | None = None,
 ) -> CompilationReport:
     """Compile a module DAG and return detailed non-sensitive diagnostics."""
     return CompilationCoordinator(agent_config, observer=observer).compile(
         mods,
         max_retries=max_retries,
+        options=options,
     )
 
 
@@ -115,6 +127,7 @@ def compile_modules(
     agent_config: AgentConfig | None = None,
     *,
     observer: CompileObserver | None = None,
+    options: CompileOptions | None = None,
 ) -> List[CompileResult]:
     """Compatibility API returning one result per input module."""
     try:
@@ -123,6 +136,7 @@ def compile_modules(
             max_retries=max_retries,
             agent_config=agent_config,
             observer=observer,
+            options=options,
         )
         return [
             result_from_report(compilation.module_reports[mod.name]) for mod in mods

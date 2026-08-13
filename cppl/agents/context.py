@@ -15,12 +15,17 @@ from ..frontend.module import InstanceCall, ModuleDef
 from ..frontend.patterns import pattern_as_dict
 
 
-PROMPT_VERSION = "cppl-agent-v2.1-patterns"
+PROMPT_VERSION = "cppl-agent-v2.3-output-keys"
 IR_VERSION = "json-ir-v1"
 
 COMPACT_SYSTEM_PROMPT = r"""You compile one hardware module into a CPPL JSON-IR body.
 Return only one JSON array. The first character must be [ and the last must be ].
-Inputs are existing SSA IDs. Every result ID is unique. End with exactly one output op.
+Inputs are existing SSA IDs. Every result ID is unique. SSA IDs must begin with a
+letter or underscore and contain only letters, digits, underscores, or $. Use
+descriptive IDs such as byte_select, write_enable, or next_pc. Numeric IDs such
+as "1" or "300" are forbidden. End with exactly one output op. Its args keys
+must exactly equal the names of ports whose direction is output; copy their
+spelling and capitalization verbatim. Never rename or omit an output.
 
 Operations:
 constant{id,op,value,width}; unary not/neg/reverse/or_reduce/and_reduce/xor_reduce{id,op,args:[x]};
@@ -206,7 +211,9 @@ def build_base_payload(
         "rules": [
             "Do not emit already_preplaced instance operations.",
             "Emit every must_emit instance exactly once after its inputs exist.",
-            "Drive every output port in the final output operation.",
+            "The final output args keys must exactly equal the names of ports whose "
+            "direction is output, with identical spelling and capitalization.",
+            "Do not rename, omit, or add output ports.",
             "Satisfy every executable input/output pattern.",
             "Each case starts from zero/reset simulation state.",
             "Each sequence starts from zero/reset state; its steps share state.",
@@ -243,6 +250,16 @@ def build_agent_context(
         payload["candidate"] = candidate
         payload["diagnostic"] = diagnostic.as_dict() if diagnostic else {}
         payload["rules"].append("Replace the candidate with a complete corrected body.")
+        payload["rules"].append(
+            "Before returning, compare the final output args keys against the output "
+            "names already listed in ports and correct any mismatch."
+        )
+        if diagnostic is not None and diagnostic.fingerprint:
+            payload["rules"].append(
+                "Do not reproduce the failing operation shape identified by diagnostic fingerprint "
+                + diagnostic.fingerprint
+                + "."
+            )
 
     user_prompt = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     estimate = estimate_tokens(COMPACT_SYSTEM_PROMPT) + estimate_tokens(user_prompt)

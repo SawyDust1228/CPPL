@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import time
 from typing import Callable, Optional, TypedDict
@@ -22,17 +23,25 @@ from .context import (
 from .models import (
     ContextBudgetError,
     DiagnosticPacket,
+    GenerationBudgetError,
     ModuleCompileReport,
+    RepeatedFailureError,
     ResolvedAgentConfig,
 )
 from ..harness import CompileEventEmitter
 from ..frontend.const_analysis import normalize_constants
 from ..frontend.module import InstanceCall, ModuleDef
-from ..ir.errors import CircuitPPLError
+from ..ir.errors import (
+    CircuitPPLError,
+    DiagnosticIssue,
+    ValidationError,
+    issues_from_errors,
+)
 from ..ir.infer import infer_widths
 from ..ir.patterns import run_patterns
 from ..ir.parser import parse_design
 from ..ir.validator import validate_design
+from ..harness.schema import IRSchemaError, validate_ir_body
 
 
 def extract_json_array(text: str) -> list:
@@ -148,24 +157,50 @@ def build_stub_modules(instances: list[InstanceCall]) -> list[dict]:
     return list(stubs.values())
 
 
-def diagnostic_from_exception(exc: Exception) -> DiagnosticPacket:
+def diagnostic_from_exception(
+    exc: Exception, candidate: list | None = None
+) -> DiagnosticPacket:
     message = str(exc)
+    structured_issues = tuple(issues_from_errors([exc]))
     location_match = re.search(r"(Module '[^']+'(?: body\[\d+\])?)", message)
     identifiers = tuple(
         dict.fromkeys(re.findall(r"'([A-Za-z_][A-Za-z0-9_$]*)'", message))
     )
+    width_values = [int(value) for value in re.findall(r"(?:width|bit)[^0-9]*(\d+)", message)]
+    fingerprint_payload = {
+        "category": type(exc).__name__,
+        "message": re.sub(r"\d+\.\d+s", "<time>", message),
+        "candidate": candidate or [],
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:16]
     return DiagnosticPacket(
         category=type(exc).__name__,
-        message=message[:1200],
-        location=location_match.group(1) if location_match else "",
+        message=message[:4000],
+        location=(
+            structured_issues[0].location
+            if structured_issues and structured_issues[0].location
+            else location_match.group(1) if location_match else ""
+        ),
         related_ids=identifiers[:12],
+        details={
+            "widths": width_values[:6],
+            "issue_count": len(structured_issues),
+            "issues": [issue.as_dict() for issue in structured_issues[:24]],
+        },
+        fingerprint=fingerprint,
     )
 
 
 class ModuleAgentState(TypedDict, total=False):
     mod: ModuleDef
     dependency_modules: list[dict]
+    cache_dependency_modules: list[dict]
     missing_pattern_dependencies: tuple[str, ...]
+    hierarchy_depth: int
+    direct_dependencies: tuple[str, ...]
+    dependency_hashes: dict[str, str]
     report: ModuleCompileReport
     started: float
     cache_key: str
@@ -179,6 +214,21 @@ class ModuleAgentState(TypedDict, total=False):
     user_prompt: str
     response_text: str
     route: str
+
+
+def invoke_generation_backend(
+    backend: LLMBackend,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    output_tokens: int | None = None,
+):
+    structured = getattr(backend, "generate_structured", None)
+    if callable(structured):
+        return structured(
+            system_prompt, user_prompt, output_tokens=output_tokens
+        )
+    return backend.generate(system_prompt, user_prompt, output_tokens=output_tokens)
 
 
 class ModuleAgentGraph:
@@ -228,8 +278,28 @@ class ModuleAgentGraph:
             if not contains_instance_op(body, inst)
         ]
         if missing:
-            names = ", ".join(inst.target_name for inst in missing)
-            raise ValueError(f"Missing required instance operation(s): {names}")
+            raise ValidationError(
+                [
+                    DiagnosticIssue(
+                        code="instance.required_operation_missing",
+                        location=f"Module '{state['mod'].name}' generated body",
+                        message=f"missing required instance operation for '{inst.target_name}'",
+                        expected={
+                            "module": inst.target_name,
+                            "name": inst.name,
+                            "id": list(inst.output_ids),
+                            "args": dict(inst.input_map),
+                        },
+                        actual="not emitted",
+                        hint="Emit this must_emit instance exactly once after all of its inputs exist.",
+                    )
+                    for inst in missing
+                ],
+                summary=(
+                    f"Module '{state['mod'].name}' is missing "
+                    f"{len(missing)} required instance operation(s)"
+                ),
+            )
         full_body = normalize_constants(
             build_instance_ops(state["preplaced"]) + body,
             state["ports"],
@@ -244,7 +314,14 @@ class ModuleAgentGraph:
 
     def _initialize(self, state: ModuleAgentState) -> dict:
         mod = state["mod"]
-        report = ModuleCompileReport(module_name=mod.name, status="cache_lookup")
+        report = ModuleCompileReport(
+            module_name=mod.name,
+            status="cache_lookup",
+            hierarchy_depth=state.get("hierarchy_depth", 0),
+            direct_dependencies=list(state.get("direct_dependencies", ())),
+            dependency_hashes=dict(state.get("dependency_hashes", {})),
+            validation_stage="cache_lookup",
+        )
         preplaced, deferred = split_instances_by_placement(mod)
         return {
             "started": time.monotonic(),
@@ -256,6 +333,23 @@ class ModuleAgentGraph:
             "diagnostic": None,
             "description_override": None,
         }
+
+    def _check_budget(self, state: ModuleAgentState) -> None:
+        report = state["report"]
+        elapsed = time.monotonic() - state["started"]
+        tokens = report.input_tokens_estimate + report.output_tokens_estimate
+        report.budget_seconds = elapsed
+        report.budget_tokens = tokens
+        if elapsed >= self.config.module_deadline_seconds:
+            raise GenerationBudgetError(
+                f"Module '{state['mod'].name}' exceeded its "
+                f"{self.config.module_deadline_seconds:.0f}s generation deadline"
+            )
+        if tokens >= self.config.max_module_tokens:
+            raise GenerationBudgetError(
+                f"Module '{state['mod'].name}' exceeded its "
+                f"{self.config.max_module_tokens} token generation budget"
+            )
 
     def _lookup_cache(self, state: ModuleAgentState) -> dict:
         report = state["report"]
@@ -269,6 +363,7 @@ class ModuleAgentGraph:
         if state.get("missing_pattern_dependencies"):
             report.status = "failed"
             report.error_category = "PatternDependencyMissing"
+            report.failure_origin = "hierarchy"
             report.error = (
                 f"Module '{state['mod'].name}' patterns require real dependency IR for: "
                 + ", ".join(state["missing_pattern_dependencies"])
@@ -283,7 +378,9 @@ class ModuleAgentGraph:
             )
             return {"report": report, "route": "done"}
 
-        key = self.cache.key_for(state["mod"], state.get("dependency_modules"))
+        key = self.cache.key_for(
+            state["mod"], state.get("cache_dependency_modules")
+        )
         report.cache_key = key
         patterns_checked = 0
 
@@ -344,6 +441,7 @@ class ModuleAgentGraph:
             )
             return {"report": report, "route": "compress"}
         report.input_tokens_estimate += context.input_tokens_estimate
+        report.validation_stage = "context_built"
         report.compression_events.extend(context.compression_events)
         return {
             "report": report,
@@ -357,6 +455,7 @@ class ModuleAgentGraph:
         compressed: list[tuple[str, list[str]]] = []
         try:
             for source, text in requirement_chunks(state["mod"].docstring, self.config):
+                self._check_budget(state)
                 context = build_requirement_compression_context(source, text, self.config)
                 response = self.backend_factory().generate(
                     context.system_prompt,
@@ -409,9 +508,14 @@ class ModuleAgentGraph:
 
     def _generate(self, state: ModuleAgentState) -> dict:
         report = state["report"]
+        try:
+            self._check_budget(state)
+        except GenerationBudgetError as exc:
+            return self._failure(state, exc)
         attempt = report.attempts + 1
         report.attempts = attempt
         report.status = "generating" if attempt == 1 else "repairing"
+        report.validation_stage = report.status
         event_kind = "generate" if attempt == 1 else "repair"
         message = f"attempt {attempt}/{self.max_retries}"
         diagnostic = state.get("diagnostic")
@@ -426,14 +530,15 @@ class ModuleAgentGraph:
             metadata={"max_attempts": self.max_retries},
         )
         try:
-            response = self.backend_factory().generate(
-                state["system_prompt"], state["user_prompt"]
+            response = invoke_generation_backend(
+                self.backend_factory(), state["system_prompt"], state["user_prompt"]
             )
         except Exception as exc:
             return self._failure(state, exc)
         report.transport_retries += response.transport_retries
         report.output_tokens_estimate += estimate_tokens(response.text)
         report.status = "validating"
+        report.validation_stage = "candidate_validation"
         self.events.emit(
             "validate",
             module_name=state["mod"].name,
@@ -448,9 +553,26 @@ class ModuleAgentGraph:
         candidate: list | None = None
         try:
             candidate = extract_json_array(state["response_text"])
+            candidate = validate_ir_body(candidate)
             module_dict, patterns_checked = self._materialize(state, candidate)
-        except (OutputParserException, ValueError, CircuitPPLError) as exc:
-            diagnostic = diagnostic_from_exception(exc)
+        except (OutputParserException, IRSchemaError, ValueError, CircuitPPLError) as exc:
+            diagnostic = diagnostic_from_exception(exc, candidate)
+            report.failure_fingerprints.append(diagnostic.fingerprint)
+            report.failure_origin = (
+                "hierarchy" if state.get("direct_dependencies") else "module"
+            )
+            if (
+                report.failure_fingerprints.count(diagnostic.fingerprint) > 1
+                and report.attempts < self.max_retries
+            ):
+                return self._failure(
+                    state,
+                    RepeatedFailureError(
+                        f"Module '{state['mod'].name}' reproduced validation failure "
+                        f"{diagnostic.fingerprint}; stopping repair early: {exc}"
+                    ),
+                    candidate=candidate or [],
+                )
             if report.attempts >= self.max_retries:
                 return self._failure(state, exc, candidate=candidate or [])
             self.events.emit(
@@ -468,10 +590,18 @@ class ModuleAgentGraph:
                 "route": "repair",
             }
         report.status = "success"
+        report.validation_stage = "published"
         report.module_dict = module_dict
         report.patterns_checked = patterns_checked
+        if report.cache_key is not None and not report.cache_hit:
+            self.cache.store(report.cache_key, module_dict)
+            report.cache_committed = True
         report.compression_events = list(dict.fromkeys(report.compression_events))
         report.duration_seconds = time.monotonic() - state["started"]
+        report.budget_seconds = report.duration_seconds
+        report.budget_tokens = (
+            report.input_tokens_estimate + report.output_tokens_estimate
+        )
         self.events.emit(
             "module_success",
             module_name=state["mod"].name,
@@ -496,6 +626,9 @@ class ModuleAgentGraph:
         report.status = "failed"
         report.error_category = type(exc).__name__
         report.error = str(exc)
+        report.diagnostics = [
+            issue.as_dict() for issue in issues_from_errors([exc])
+        ]
         report.module_dict = None
         report.compression_events = list(dict.fromkeys(report.compression_events))
         report.duration_seconds = time.monotonic() - state["started"]

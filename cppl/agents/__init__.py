@@ -2,6 +2,8 @@
 
 from .models import (
     AgentConfig,
+    CompileOptions,
+    CompiledModuleArtifact,
     CompilationReport,
     ContextBudgetError,
     DiagnosticPacket,
@@ -13,8 +15,10 @@ from ..harness import CompileEvent, CompileObserver, TerminalCompileUI
 
 __all__ = [
     "AgentConfig",
+    "CompileOptions",
     "CompilationCoordinator",
     "CompilationReport",
+    "CompiledModuleArtifact",
     "ContextBudgetError",
     "DiagnosticPacket",
     "ModuleCompileReport",

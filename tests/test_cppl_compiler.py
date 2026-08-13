@@ -19,6 +19,7 @@ from cppl.agents.worker import (
 )
 from cppl.frontend.compiler import CompileResult
 from cppl.frontend.prompt import build_user_prompt, SYSTEM_PROMPT
+from cppl.harness.schema import IRSchemaError, validate_ir_body
 
 
 # -----------------------------------------------------------------------
@@ -32,6 +33,21 @@ class TestExtractJson:
         arr = extract_json_array(text)
         assert isinstance(arr, list)
         assert len(arr) == 2
+
+
+class TestIRSchemaDiagnostics:
+    def test_reports_all_schema_errors(self):
+        candidate = [
+            {"id": "1", "op": "constant", "value": 0, "width": 0},
+            {"id": "sum", "op": "add", "args": ["a"]},
+        ]
+        with pytest.raises(IRSchemaError) as error:
+            validate_ir_body(candidate)
+
+        assert len(error.value.issues) >= 3
+        locations = {issue.location for issue in error.value.issues}
+        assert any(location.startswith("0") for location in locations)
+        assert any(location.startswith("1") for location in locations)
 
     def test_markdown_fenced(self):
         text = '```json\n[{"op":"output","args":{"out":"a"}}]\n```'

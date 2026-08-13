@@ -18,6 +18,14 @@ class ContextBudgetError(AgentRuntimeError):
     """A module cannot fit in the configured model context window."""
 
 
+class GenerationBudgetError(AgentRuntimeError):
+    """A module exhausted its total generation time or token budget."""
+
+
+class RepeatedFailureError(AgentRuntimeError):
+    """A repair attempt reproduced an already rejected candidate failure."""
+
+
 def env_int(name: str, default: int) -> int:
     value = resolve_env_value(name)
     return int(value) if value is not None else default
@@ -50,6 +58,10 @@ class AgentConfig:
     transport_retries: Optional[int] = None
     request_timeout: Optional[float] = None
     generation_kwargs: Optional[dict[str, Any]] = None
+    module_deadline_seconds: Optional[float] = None
+    max_module_tokens: Optional[int] = None
+    checkpoint_enabled: Optional[bool] = None
+    checkpoint_path: Optional[str | Path] = None
 
     def resolve(self) -> "ResolvedAgentConfig":
         """Merge Python overrides with CPPL_AGENT_* and existing LLM defaults."""
@@ -78,6 +90,13 @@ class AgentConfig:
         cache_dir = self.cache_dir
         if cache_dir is None:
             cache_dir = resolve_env_value("CPPL_AGENT_CACHE_DIR") or ".cppl/cache"
+
+        checkpoint_path = self.checkpoint_path
+        if checkpoint_path is None:
+            checkpoint_path = (
+                resolve_env_value("CPPL_AGENT_CHECKPOINT_PATH")
+                or ".cppl/checkpoints.sqlite3"
+            )
 
         resolved = ResolvedAgentConfig(
             max_parallelism=(
@@ -119,6 +138,22 @@ class AgentConfig:
             ),
             request_timeout=request_timeout,
             generation_kwargs=generation_kwargs,
+            module_deadline_seconds=(
+                self.module_deadline_seconds
+                if self.module_deadline_seconds is not None
+                else float(resolve_env_value("CPPL_AGENT_MODULE_DEADLINE") or 600)
+            ),
+            max_module_tokens=(
+                self.max_module_tokens
+                if self.max_module_tokens is not None
+                else int(resolve_env_value("CPPL_AGENT_MAX_MODULE_TOKENS") or 60000)
+            ),
+            checkpoint_enabled=(
+                self.checkpoint_enabled
+                if self.checkpoint_enabled is not None
+                else env_bool("CPPL_AGENT_CHECKPOINT_ENABLED", True)
+            ),
+            checkpoint_path=Path(checkpoint_path),
         )
         resolved.validate()
         return resolved
@@ -137,6 +172,10 @@ class ResolvedAgentConfig:
     transport_retries: int
     request_timeout: float
     generation_kwargs: dict[str, Any] = field(default_factory=dict)
+    module_deadline_seconds: float = 600.0
+    max_module_tokens: int = 60000
+    checkpoint_enabled: bool = True
+    checkpoint_path: Path = Path(".cppl/checkpoints.sqlite3")
 
     def validate(self) -> None:
         if self.max_parallelism <= 0:
@@ -151,6 +190,10 @@ class ResolvedAgentConfig:
             raise ValueError("transport_retries must be non-negative")
         if self.request_timeout <= 0:
             raise ValueError("request_timeout must be positive")
+        if self.module_deadline_seconds <= 0:
+            raise ValueError("module_deadline_seconds must be positive")
+        if self.max_module_tokens <= 0:
+            raise ValueError("max_module_tokens must be positive")
         if self.output_tokens + self.safety_margin_tokens >= self.context_window_tokens:
             raise ValueError(
                 "output_tokens plus safety_margin_tokens must be smaller than "
@@ -165,10 +208,19 @@ class ResolvedAgentConfig:
 
     def cache_identity(self) -> dict[str, Any]:
         return {
-            "context_window_tokens": self.context_window_tokens,
             "output_tokens": self.output_tokens,
             "generation_kwargs": self.generation_kwargs,
         }
+
+
+@dataclass(frozen=True)
+class CompileOptions:
+    """Per-run controls for resumable compilation."""
+
+    run_id: Optional[str] = None
+    resume: bool = True
+    max_semantic_attempts: Optional[int] = None
+    module_deadline_seconds: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +231,8 @@ class DiagnosticPacket:
     message: str
     location: str = ""
     related_ids: tuple[str, ...] = ()
+    details: dict[str, Any] = field(default_factory=dict)
+    fingerprint: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -186,7 +240,21 @@ class DiagnosticPacket:
             "message": self.message,
             "location": self.location,
             "related_ids": list(self.related_ids),
+            "details": self.details,
+            "fingerprint": self.fingerprint,
         }
+
+
+@dataclass(frozen=True)
+class CompiledModuleArtifact:
+    """Validated output published by one atomic user-defined module task."""
+
+    module_name: str
+    semantic_hash: str
+    interface_hash: str
+    dependency_hashes: tuple[tuple[str, str], ...]
+    patterns_checked: int
+    module_dict: dict = field(repr=False)
 
 
 @dataclass
@@ -201,9 +269,25 @@ class ModuleCompileReport:
     output_tokens_estimate: int = 0
     cache_hit: bool = False
     patterns_checked: int = 0
+    cache_committed: bool = False
+    resumed: bool = False
+    failure_fingerprints: list[str] = field(default_factory=list)
+    budget_seconds: float = 0.0
+    budget_tokens: int = 0
+    hierarchy_depth: int = 0
+    direct_dependencies: list[str] = field(default_factory=list)
+    dependency_hashes: dict[str, str] = field(default_factory=dict)
+    artifact_hash: str = ""
+    interface_hash: str = ""
+    validation_stage: str = ""
+    failure_origin: str = ""
+    # Compatibility fields retained for one release. Modules are always atomic.
+    plan_strategy: str = "hierarchy_node"
+    planned_blocks: list[str] = field(default_factory=list)
     compression_events: list[str] = field(default_factory=list)
     error_category: Optional[str] = None
     error: Optional[str] = None
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
     module_dict: Optional[dict] = field(default=None, repr=False)
     cache_key: Optional[str] = field(default=None, repr=False)
 
@@ -220,6 +304,8 @@ class CompilationReport:
     llm_calls: int
     cache_hits: int
     design_error: Optional[str] = None
+    run_id: Optional[str] = None
+    resumed_modules: int = 0
 
     @property
     def success(self) -> bool:

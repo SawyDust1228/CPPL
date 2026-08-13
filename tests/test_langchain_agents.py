@@ -8,6 +8,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from cppl import In, Out, module
 from cppl.agents.backend import LangChainBackend, LLMBackendError, create_chat_model
 from cppl.agents.models import AgentConfig
+from cppl.harness.schema import IRSchemaError, validate_ir_body
 from cppl.agents.runtime import CompilationCoordinator
 from cppl.env import LLMModelConfig
 
@@ -121,3 +122,44 @@ def test_model_failure_ends_module_graph_with_report(tmp_path):
     assert not report.success
     assert report.module_reports["M"].error_category == "LLMBackendError"
     assert "provider unavailable" in report.module_reports["M"].error
+
+
+def test_ir_schema_rejects_unknown_operation_and_invalid_id():
+    with pytest.raises(IRSchemaError, match="Input tag 'binary'"):
+        validate_ir_body([{"id": "x", "op": "binary", "args": ["a", "b"]}])
+    with pytest.raises(IRSchemaError, match="pattern"):
+        validate_ir_body([{"id": "", "op": "constant", "value": 0, "width": 1}])
+    with pytest.raises(IRSchemaError, match="pattern"):
+        validate_ir_body([{"id": "300", "op": "constant", "value": 0, "width": 1}])
+    with pytest.raises(IRSchemaError, match="pattern"):
+        validate_ir_body(
+            [
+                {
+                    "id": ["1"],
+                    "op": "mem",
+                    "width": 8,
+                    "depth": 1,
+                    "clock": "clk",
+                    "reads": [{"addr": "addr", "enable": "enable"}],
+                    "writes": [],
+                }
+            ]
+        )
+
+
+def test_structured_backend_falls_back_when_provider_rejects_schema(tmp_path):
+    class SchemaRejectingModel(FakeListChatModel):
+        def with_structured_output(self, *args, **kwargs):
+            class RejectingRunnable:
+                def invoke(self, *args, **kwargs):
+                    raise RuntimeError("Invalid schema for response_format")
+
+            return RejectingRunnable()
+
+    model = SchemaRejectingModel(
+        responses=['[{"op":"output","args":{"out":"a"}}]']
+    )
+    backend = LangChainBackend(config(tmp_path), chat_model=model)
+    response = backend.generate_structured("system", "user")
+    assert response.text.startswith("[")
+    assert backend._structured_supported is False

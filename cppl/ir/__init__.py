@@ -7,6 +7,7 @@ from .interpreter import Interpreter
 from .patterns import run_patterns
 from .errors import (
     CircuitPPLError,
+    DiagnosticIssue,
     ParseError,
     ValidationError,
     SSAError,
@@ -25,6 +26,7 @@ __all__ = [
     "Interpreter",
     "run_patterns",
     "CircuitPPLError",
+    "DiagnosticIssue",
     "ParseError",
     "ValidationError",
     "SSAError",

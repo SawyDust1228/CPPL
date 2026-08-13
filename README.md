@@ -87,11 +87,13 @@ examples; they are executable tests rather than a formal proof for every input.
 ### Agent Runtime
 
 CPPL's complete agent system is implemented with LangChain and LangGraph.
-LangChain owns provider chat models, prompt pipelines, JSON parsing, and
-transport retries. A per-module LangGraph handles cache lookup, generation,
-validation, requirement compression, and repair loops; a parent LangGraph
-coordinates dependency waves, bounded concurrency, failure propagation, and
-whole-design validation. Validated results are cached by content under
+Every user-written `@module` is one atomic compilation boundary; the agent never
+splits it into hidden submodules. LangChain owns provider chat models, prompt
+pipelines, JSON parsing, and transport retries. A per-module LangGraph handles
+cache lookup, generation, validation, requirement compression, and repair loops;
+a deterministic hierarchy scheduler compiles the module DAG bottom-up, runs all
+dependency-ready siblings concurrently, publishes validated child artifacts, and
+then releases their parents for hierarchical validation. Validated results are cached by content under
 `.cppl/cache`, so compiling an unchanged design again requires no LLM calls.
 
 Existing code continues to work. Optional runtime controls and reports are

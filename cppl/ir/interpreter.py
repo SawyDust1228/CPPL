@@ -99,6 +99,7 @@ class Interpreter:
         top: Optional[str] = None,
         widths: Optional[Dict[str, Dict[str, ValueInfo]]] = None,
         base_dir: Optional[Union[str, Path]] = None,
+        memory_fixtures: Optional[Mapping[str, Mapping[int, int]]] = None,
     ) -> None:
         self.modules = list(modules)
         validate_design(self.modules)
@@ -107,6 +108,10 @@ class Interpreter:
         self.check_recursive_instances()
         self.top = self.select_top(top)
         self.base_dir = Path(base_dir) if base_dir is not None else Path.cwd()
+        self.memory_fixtures = {
+            self.normalize_hierarchy_path(path): dict(words)
+            for path, words in (memory_fixtures or {}).items()
+        }
         self._initializing = False
         self._root = self.build_instance_state(
             self._modules_by_name[self.top], self.top
@@ -152,6 +157,8 @@ class Interpreter:
     def peek(self, path: str) -> int:
         """Read a port, SSA value, or register using a dotted hierarchy path."""
         instance, value_name = self.resolve_value_path(path)
+        if value_name in instance.outputs:
+            return instance.outputs[value_name]
         if value_name not in instance.env:
             raise SimulationError(f"Unknown value path '{path}'")
         return instance.env[value_name]
@@ -169,6 +176,19 @@ class Interpreter:
         if len(matches) > 1:
             raise SimulationError(f"Ambiguous memory path '{path}'")
         return tuple(matches[0].values)
+
+    def peek_probe(self, path: str) -> int:
+        """Read an SSA/register value or one indexed memory word."""
+        match = re.fullmatch(r"(.+)\[(\d+)\]", path)
+        if match:
+            values = self.peek_memory(match.group(1))
+            address = int(match.group(2))
+            if address >= len(values):
+                raise SimulationError(
+                    f"Memory probe '{path}' is outside depth {len(values)}"
+                )
+            return values[address]
+        return self.peek(path)
 
     def reset_state(self) -> None:
         """Restore inputs and sequential state to their initial values."""
@@ -261,6 +281,19 @@ class Interpreter:
 
     def load_memory(self, op: MemOp, instance_path: str) -> List[int]:
         values = [0] * op.depth
+        memory_path = self.normalize_hierarchy_path(
+            f"{instance_path}.{op.name or (op.id[0] if op.id else 'mem')}"
+        )
+        fixture = self.memory_fixtures.get(memory_path)
+        if fixture is not None:
+            for address, value in fixture.items():
+                if address < 0 or address >= op.depth:
+                    raise SimulationError(
+                        f"Memory fixture '{memory_path}' writes address {address}, "
+                        f"outside depth {op.depth}"
+                    )
+                values[address] = truncate_value(value, op.width)
+            return values
         if not op.initFile:
             return values
 
@@ -663,6 +696,11 @@ class Interpreter:
                 raise SimulationError(f"Unknown instance path '{path}'")
             instance = child
         return instance, parts[-1]
+
+    def normalize_hierarchy_path(self, path: str) -> str:
+        if path == self.top or path.startswith(self.top + "."):
+            return path
+        return f"{self.top}.{path}"
 
 
 __all__ = ["Interpreter", "SimulationError"]

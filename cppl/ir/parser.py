@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Union
 
-from .errors import ParseError
+from .errors import DiagnosticIssue, ParseError, issues_from_errors
+from .identifiers import is_valid_ssa_id
 from .models import (
     BINARY_OPS,
     CAST_OPS,
@@ -50,10 +51,34 @@ def parse_design(raw: Union[str, Any]) -> List[Module]:
         raise ParseError("Design root must be a JSON array or object")
 
     modules: List[Module] = []
+    errors: list[ParseError] = []
     for i, mod_raw in enumerate(data):
         if not isinstance(mod_raw, dict):
-            raise ParseError(f"Module at index {i} must be a JSON object")
-        modules.append(parse_module(mod_raw, i))
+            errors.append(
+                ParseError(
+                    [
+                        DiagnosticIssue(
+                            code="parse.module_type",
+                            location=f"module[{i}]",
+                            message="module must be a JSON object",
+                            expected="object",
+                            actual=type(mod_raw).__name__,
+                            hint="Wrap the module name, ports, and body in one JSON object.",
+                        )
+                    ]
+                )
+            )
+            continue
+        try:
+            modules.append(parse_module(mod_raw, i))
+        except ParseError as exc:
+            errors.append(exc)
+    if errors:
+        issues = issues_from_errors(errors)
+        raise ParseError(
+            issues,
+            summary=f"JSON-IR parsing found {len(issues)} error(s)",
+        )
     return modules
 
 
@@ -71,36 +96,90 @@ def parse_module(raw: Dict[str, Any], index: int) -> Module:
         raise ParseError(f"{ctx}: 'ports' must be an object")
 
     ports: Dict[str, PortDef] = {}
+    errors: list[ParseError] = []
     for pname, pdef in ports_raw.items():
-        if not isinstance(pdef, dict):
-            raise ParseError(f"{ctx}: port '{pname}' must be an object")
-        d = pdef.get("dir")
-        if d not in ("input", "output"):
-            raise ParseError(f"{ctx}: port '{pname}' dir must be 'input' or 'output'")
-        w = pdef.get("width")
-        if isinstance(w, bool) or not isinstance(w, int) or w <= 0:
-            raise ParseError(f"{ctx}: port '{pname}' width must be a positive integer")
-        port_type = pdef.get("type", "bits")
-        if port_type not in ("bits", "clock"):
-            raise ParseError(f"{ctx}: port '{pname}' type must be 'bits' or 'clock'")
-        if port_type == "clock":
-            if d != "input":
-                raise ParseError(f"{ctx}: clock port '{pname}' must be an input")
-            if w != 1:
-                raise ParseError(f"{ctx}: clock port '{pname}' width must be 1")
-        ports[pname] = PortDef(dir=PortDir(d), width=w, type=port_type)
+        try:
+            ports[pname] = parse_port_definition(ctx, pname, pdef)
+        except ParseError as exc:
+            errors.append(exc)
 
     body_raw = raw.get("body")
     if not isinstance(body_raw, list):
-        raise ParseError(f"{ctx}: 'body' must be an array")
+        errors.append(
+            ParseError(
+                [
+                    DiagnosticIssue(
+                        code="parse.body_type",
+                        location=f"{ctx} body",
+                        message="'body' must be an array",
+                        expected="array",
+                        actual=type(body_raw).__name__,
+                        hint="Return a JSON array of operations.",
+                    )
+                ]
+            )
+        )
+        body_raw = []
 
     body: List[Operation] = []
     for j, op_raw in enumerate(body_raw):
         if isinstance(op_raw, dict) and "_comment" in op_raw and "op" not in op_raw:
             continue  # skip comment-only entries
-        body.append(parse_operation(op_raw, ctx, j))
+        try:
+            body.append(parse_operation(op_raw, ctx, j))
+        except ParseError as exc:
+            errors.append(exc)
+
+    if errors:
+        issues = issues_from_errors(errors)
+        raise ParseError(
+            issues,
+            summary=f"{ctx} parsing found {len(issues)} error(s)",
+        )
 
     return Module(name=name, ports=ports, body=body)
+
+
+def parse_port_definition(ctx: str, pname: object, pdef: Any) -> PortDef:
+    """Parse one port with a detailed, independently collectable error."""
+    loc = f"{ctx} port '{pname}'"
+    if not is_valid_ssa_id(pname):
+        raise ParseError(
+            [
+                DiagnosticIssue(
+                    code="parse.port_identifier",
+                    location=loc,
+                    message="port name must be a valid SSA identifier",
+                    expected="a meaningful string beginning with a letter or underscore",
+                    actual=pname,
+                    hint="Use letters, digits, '_', or '$'; numeric-only names are forbidden.",
+                )
+            ]
+        )
+    if not isinstance(pdef, dict):
+        raise ParseError(
+            f"{loc}: port definition must be an object; expected={{'dir': 'input|output', 'width': <positive integer>}}; actual={pdef!r}"
+        )
+    d = pdef.get("dir")
+    if d not in ("input", "output"):
+        raise ParseError(
+            f"{loc}: dir must be 'input' or 'output'; actual={d!r}; fix=use the exact interface direction"
+        )
+    w = pdef.get("width")
+    if isinstance(w, bool) or not isinstance(w, int) or w <= 0:
+        raise ParseError(
+            f"{loc}: width must be a positive integer; actual={w!r}; fix=set the intended bit width"
+        )
+    port_type = pdef.get("type", "bits")
+    if port_type not in ("bits", "clock"):
+        raise ParseError(
+            f"{loc}: type must be 'bits' or 'clock'; actual={port_type!r}"
+        )
+    if port_type == "clock" and (d != "input" or w != 1):
+        raise ParseError(
+            f"{loc}: clock ports must be 1-bit inputs; actual direction={d!r}, width={w!r}"
+        )
+    return PortDef(dir=PortDir(d), width=w, type=port_type)
 
 
 def parse_operation(raw: Dict[str, Any], ctx: str, index: int) -> Operation:
@@ -141,8 +220,11 @@ def parse_operation(raw: Dict[str, Any], ctx: str, index: int) -> Operation:
 
 def require_id(raw: Dict[str, Any], loc: str) -> str:
     id_ = raw.get("id")
-    if not isinstance(id_, str) or not id_:
-        raise ParseError(f"{loc}: 'id' must be a non-empty string")
+    if not is_valid_ssa_id(id_):
+        raise ParseError(
+            f"{loc}: 'id' must be an SSA identifier beginning with a letter or "
+            "underscore and containing only letters, digits, underscores, or '$'"
+        )
     return id_
 
 
@@ -290,8 +372,12 @@ def parse_memory_operation(raw: Dict[str, Any], loc: str) -> MemOp:
     if not isinstance(id_, list):
         raise ParseError(f"{loc}: 'id' must be an array of strings")
     for i, v in enumerate(id_):
-        if not isinstance(v, str) or not v:
-            raise ParseError(f"{loc}: 'id[{i}]' must be a non-empty string")
+        if not is_valid_ssa_id(v):
+            raise ParseError(
+                f"{loc}: 'id[{i}]' must be an SSA identifier beginning with a "
+                "letter or underscore and containing only letters, digits, "
+                "underscores, or '$'"
+            )
 
     width = raw.get("width")
     if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
@@ -380,8 +466,12 @@ def parse_instance_operation(raw: Dict[str, Any], loc: str) -> InstanceOp:
     if not isinstance(id_, list):
         raise ParseError(f"{loc}: 'id' must be an array of strings")
     for i, v in enumerate(id_):
-        if not isinstance(v, str) or not v:
-            raise ParseError(f"{loc}: 'id[{i}]' must be a non-empty string")
+        if not is_valid_ssa_id(v):
+            raise ParseError(
+                f"{loc}: 'id[{i}]' must be an SSA identifier beginning with a "
+                "letter or underscore and containing only letters, digits, "
+                "underscores, or '$'"
+            )
     module = raw.get("module")
     if not isinstance(module, str) or not module:
         raise ParseError(f"{loc}: 'module' must be a non-empty string")

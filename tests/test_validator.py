@@ -5,6 +5,7 @@ import pytest
 from cppl.ir.errors import CycleError, SSAError, ValidationError
 from cppl.ir.parser import parse_design
 from cppl.ir.validator import validate_design
+from cppl.ir.models import ConstantOp, Module, OutputOp, PortDef, PortDir
 
 
 def validate_candidate(json_str: str) -> None:
@@ -47,6 +48,46 @@ class TestModuleLevel:
 
 
 class TestSSA:
+    def test_collects_multiple_independent_ssa_errors(self):
+        raw = """{
+          "name":"A",
+          "ports":{"x":{"dir":"input","width":8},"y":{"dir":"output","width":8}},
+          "body":[
+            {"id":"sum","op":"add","args":["missing_left","missing_right"]},
+            {"id":"x","op":"constant","value":0,"width":8},
+            {"op":"output","args":{"wrong_port":"missing_output"}}
+          ]
+        }"""
+        with pytest.raises(ValidationError) as error:
+            validate_candidate(raw)
+
+        issues = error.value.issues
+        assert len(issues) == 5
+        assert {issue.code for issue in issues} == {
+            "ssa.shadowing",
+            "ssa.undefined_reference",
+            "output.port_keys",
+        }
+        message = str(error.value)
+        assert "missing_left" in message
+        assert "missing_right" in message
+        assert "missing_output" in message
+        assert "wrong_port" in message
+
+    def test_validator_rejects_numeric_id_when_parser_is_bypassed(self):
+        module = Module(
+            name="A",
+            ports={
+                "y": PortDef(dir=PortDir.OUTPUT, width=1),
+            },
+            body=[
+                ConstantOp(id="300", op="constant", value=0, width=1),
+                OutputOp(op="output", args={"y": "300"}),
+            ],
+        )
+        with pytest.raises(SSAError, match="invalid SSA identifier '300'"):
+            validate_design([module])
+
     def test_forward_reference(self):
         raw = """{
           "name":"A",
@@ -92,7 +133,10 @@ class TestOutputCoverage:
           "ports":{"x":{"dir":"input","width":8},"y":{"dir":"output","width":8},"z":{"dir":"output","width":8}},
           "body":[{"op":"output","args":{"y":"x"}}]
         }"""
-        with pytest.raises(ValidationError, match="missing ports.*z"):
+        with pytest.raises(
+            ValidationError,
+            match=r"missing ports.*z.*expected exact output args keys.*y.*z",
+        ):
             validate_candidate(raw)
 
     def test_extra_output_port(self):
@@ -101,7 +145,10 @@ class TestOutputCoverage:
           "ports":{"x":{"dir":"input","width":8},"y":{"dir":"output","width":8}},
           "body":[{"op":"output","args":{"y":"x","z":"x"}}]
         }"""
-        with pytest.raises(ValidationError, match="extra ports.*z"):
+        with pytest.raises(
+            ValidationError,
+            match=r"extra ports.*z.*expected exact output args keys.*y",
+        ):
             validate_candidate(raw)
 
     def test_exact_coverage_passes(self):

@@ -27,15 +27,54 @@ def validate_pattern_name(name: str | None) -> None:
 
 
 @dataclass(frozen=True)
+class MemoryFixture:
+    """Initial memory words loaded before one pattern starts."""
+
+    path: str
+    words: Mapping[int, int]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.path, str) or not self.path.strip():
+            raise TypeError("MemoryFixture.path must be a non-empty hierarchy path")
+        if not isinstance(self.words, Mapping):
+            raise TypeError("MemoryFixture.words must be an address-to-value mapping")
+        normalized: dict[int, int] = {}
+        for address, value in self.words.items():
+            if isinstance(address, bool) or not isinstance(address, int) or address < 0:
+                raise TypeError("MemoryFixture addresses must be non-negative integers")
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError("MemoryFixture values must be integers")
+            normalized[address] = value
+        object.__setattr__(self, "path", self.path.strip())
+        object.__setattr__(self, "words", MappingProxyType(normalized))
+
+
+def freeze_fixtures(
+    fixtures: SequenceABC[MemoryFixture], field_name: str
+) -> tuple[MemoryFixture, ...]:
+    if isinstance(fixtures, (str, bytes)) or not isinstance(fixtures, SequenceABC):
+        raise TypeError(f"{field_name} must be a sequence of MemoryFixture objects")
+    result = tuple(fixtures)
+    if any(not isinstance(item, MemoryFixture) for item in result):
+        raise TypeError(f"{field_name} must contain only MemoryFixture objects")
+    paths = [item.path for item in result]
+    if len(paths) != len(set(paths)):
+        raise ValueError(f"{field_name} contains duplicate memory paths")
+    return result
+
+
+@dataclass(frozen=True)
 class Step:
     """One input update and optional output checkpoint in a sequence."""
 
     inputs: Mapping[str, int] = field(default_factory=dict)
     outputs: Mapping[str, int] = field(default_factory=dict)
+    probes: Mapping[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "inputs", freeze_values(self.inputs, "Step.inputs"))
         object.__setattr__(self, "outputs", freeze_values(self.outputs, "Step.outputs"))
+        object.__setattr__(self, "probes", freeze_values(self.probes, "Step.probes"))
 
 
 @dataclass(frozen=True)
@@ -45,11 +84,15 @@ class Case:
     inputs: Mapping[str, int]
     outputs: Mapping[str, int]
     name: str | None = None
+    probes: Mapping[str, int] = field(default_factory=dict)
+    fixtures: SequenceABC[MemoryFixture] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         validate_pattern_name(self.name)
         object.__setattr__(self, "inputs", freeze_values(self.inputs, "Case.inputs"))
         object.__setattr__(self, "outputs", freeze_values(self.outputs, "Case.outputs"))
+        object.__setattr__(self, "probes", freeze_values(self.probes, "Case.probes"))
+        object.__setattr__(self, "fixtures", freeze_fixtures(self.fixtures, "Case.fixtures"))
 
 
 @dataclass(frozen=True)
@@ -58,6 +101,7 @@ class Sequence:
 
     steps: SequenceABC[Step]
     name: str | None = None
+    fixtures: SequenceABC[MemoryFixture] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         validate_pattern_name(self.name)
@@ -69,6 +113,9 @@ class Sequence:
         if any(not isinstance(step, Step) for step in steps):
             raise TypeError("Sequence steps must contain only Step objects")
         object.__setattr__(self, "steps", steps)
+        object.__setattr__(
+            self, "fixtures", freeze_fixtures(self.fixtures, "Sequence.fixtures")
+        )
 
 
 Pattern = Union[Case, Sequence]
@@ -108,8 +155,8 @@ def normalize_patterns(
     for index, pattern in enumerate(patterns):
         if isinstance(pattern, Case):
             name = pattern.name.strip() if pattern.name else f"case[{index}]"
-            if not pattern.outputs:
-                raise ValueError(f"Pattern '{name}' must check at least one output")
+            if not pattern.outputs and not pattern.probes:
+                raise ValueError(f"Pattern '{name}' must check at least one output or probe")
             item: Pattern = Case(
                 inputs=normalize_values(
                     pattern.inputs, input_widths, f"Pattern '{name}' inputs"
@@ -118,6 +165,8 @@ def normalize_patterns(
                     pattern.outputs, output_widths, f"Pattern '{name}' outputs"
                 ),
                 name=name,
+                probes=pattern.probes,
+                fixtures=pattern.fixtures,
             )
         elif isinstance(pattern, Sequence):
             name = pattern.name.strip() if pattern.name else f"sequence[{index}]"
@@ -135,12 +184,13 @@ def normalize_patterns(
                         output_widths,
                         f"Pattern '{name}' step {step_index} outputs",
                     ),
+                    probes=step.probes,
                 )
                 for step_index, step in enumerate(pattern.steps)
             )
-            if not any(step.outputs for step in steps):
-                raise ValueError(f"Pattern '{name}' must check at least one output")
-            item = Sequence(steps=steps, name=name)
+            if not any(step.outputs or step.probes for step in steps):
+                raise ValueError(f"Pattern '{name}' must check at least one output or probe")
+            item = Sequence(steps=steps, name=name, fixtures=pattern.fixtures)
         else:
             raise TypeError(
                 "module patterns must contain only Case or Sequence objects"
@@ -163,15 +213,24 @@ def pattern_as_dict(pattern: Pattern) -> dict:
             "name": pattern.name,
             "inputs": dict(pattern.inputs),
             "outputs": dict(pattern.outputs),
+            "probes": dict(pattern.probes),
+            "fixtures": [
+                {"path": fixture.path, "words": dict(fixture.words)}
+                for fixture in pattern.fixtures
+            ],
         }
     return {
         "kind": "sequence",
         "name": pattern.name,
         "steps": [
-            {"inputs": dict(step.inputs), "outputs": dict(step.outputs)}
+            {"inputs": dict(step.inputs), "outputs": dict(step.outputs), "probes": dict(step.probes)}
             for step in pattern.steps
+        ],
+        "fixtures": [
+            {"path": fixture.path, "words": dict(fixture.words)}
+            for fixture in pattern.fixtures
         ],
     }
 
 
-__all__ = ["Case", "Sequence", "Step"]
+__all__ = ["Case", "MemoryFixture", "Sequence", "Step"]

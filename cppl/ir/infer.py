@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List
 
-from .errors import WidthError
+from .errors import DiagnosticIssue, WidthError, issues_from_errors
 from .models import (
     BinaryOp,
     CastOp,
@@ -42,8 +42,18 @@ def infer_widths(modules: List[Module]) -> Dict[str, Dict[str, ValueInfo]]:
     """
     module_map: Dict[str, Module] = {m.name: m for m in modules}
     result: Dict[str, Dict[str, ValueInfo]] = {}
+    errors: list[WidthError] = []
     for mod in modules:
-        result[mod.name] = infer_module(mod, module_map)
+        try:
+            result[mod.name] = infer_module(mod, module_map)
+        except WidthError as exc:
+            errors.append(exc)
+    if errors:
+        issues = issues_from_errors(errors)
+        raise WidthError(
+            issues,
+            summary=f"Width inference found {len(issues)} error(s) across all modules",
+        )
     return result
 
 
@@ -165,7 +175,18 @@ def can_infer(op: Operation, env: Dict[str, ValueInfo]) -> bool:
 def width_of(name: str, env: Dict[str, ValueInfo], loc: str) -> int:
     info = env.get(name)
     if info is None:
-        raise WidthError(f"{loc}: unknown value '{name}' during width inference")
+        raise WidthError(
+            [
+                DiagnosticIssue(
+                    code="width.unknown_value",
+                    location=loc,
+                    message=f"unknown value '{name}' during width inference",
+                    actual=name,
+                    hint="Define the referenced SSA value and fix earlier validation errors first.",
+                )
+            ],
+            summary=f"{loc} cannot infer operand width",
+        )
     return info.width
 
 
