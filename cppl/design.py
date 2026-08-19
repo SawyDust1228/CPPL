@@ -116,7 +116,7 @@ class Design:
 
     def run_ir_pipeline(
         self,
-        max_retries: int = 5,
+        max_retries: int = 3,
         *,
         observer: CompileObserver | None = None,
         options: CompileOptions | None = None,

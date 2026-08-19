@@ -91,6 +91,8 @@ def test_coordinator_accepts_real_langchain_chat_model(tmp_path):
 
     assert report.success
     assert report.module_reports["M"].attempts == 1
+    assert report.module_reports["M"].simulation_attempts == 0
+    assert report.module_reports["M"].static_repairs == 0
 
 
 def test_model_failure_ends_module_graph_with_report(tmp_path):

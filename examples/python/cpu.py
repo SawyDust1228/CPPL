@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from cppl import (
     AgentConfig,
     Case,
@@ -11,6 +13,110 @@ from cppl import (
     Step,
     module,
 )
+
+
+PROBLEM_DIR = Path(__file__).resolve().parent / "problem"
+INSTRUCTION_IMAGE = PROBLEM_DIR / "inst.dat"
+
+
+def load_hex_words(path: Path) -> dict[int, int]:
+    """Load the same whitespace/comment based hex format accepted by CPPL mem."""
+    words: dict[int, int] = {}
+    address = 0
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("//", 1)[0].split("#", 1)[0]
+        for token in line.split():
+            if token.startswith("@"):
+                address = int(token[1:].replace("_", ""), 16)
+                continue
+            words[address] = int(token.replace("_", ""), 16)
+            address += 1
+    return words
+
+
+PROGRAM_WORDS = load_hex_words(INSTRUCTION_IMAGE)
+
+
+def cpu_program_steps() -> list[Step]:
+    """Clock the current problem image and check its architectural milestones."""
+    checkpoints = {
+        1: {"pc0.pc": 0x004, "reg_file0.reg_file[1]": 0x100},
+        3: {"pc0.pc": 0x00C, "reg_file0.reg_file[3]": 0xFFFFFFFD},
+        6: {"pc0.pc": 0x018, "reg_file0.reg_file[6]": 20},
+        11: {
+            "pc0.pc": 0x02C,
+            "reg_file0.reg_file[9]": 28,
+            "reg_file0.reg_file[10]": 28,
+            "reg_file0.reg_file[11]": 0,
+        },
+        14: {
+            "pc0.pc": 0x038,
+            "reg_file0.reg_file[12]": 40,
+            "reg_file0.reg_file[13]": 0x7FFFFFFE,
+            "reg_file0.reg_file[14]": 0xFFFFFFFE,
+        },
+        16: {
+            "pc0.pc": 0x040,
+            "reg_file0.reg_file[15]": 8,
+            "mem0.mem[64]": 8,
+        },
+        22: {
+            "pc0.pc": 0x058,
+            "reg_file0.reg_file[16]": 0xFFFFFFFD,
+            "reg_file0.reg_file[17]": 0xFD,
+            "reg_file0.reg_file[18]": 8,
+            "reg_file0.reg_file[19]": 8,
+            "mem0.mem[65]": 0x000800FD,
+        },
+        28: {
+            "pc0.pc": 0x088,
+            "reg_file0.reg_file[20]": 0,
+            "reg_file0.reg_file[21]": 0,
+            "reg_file0.reg_file[22]": 0,
+            "reg_file0.reg_file[23]": 0,
+            "reg_file0.reg_file[24]": 0,
+            "reg_file0.reg_file[25]": 0,
+        },
+        29: {
+            "pc0.pc": 0x090,
+            "reg_file0.reg_file[26]": 0x08C,
+            "reg_file0.reg_file[27]": 0,
+        },
+        31: {
+            "pc0.pc": 0x0A4,
+            "reg_file0.reg_file[28]": 0x09C,
+            "reg_file0.reg_file[29]": 0x098,
+            "reg_file0.reg_file[30]": 0,
+            "reg_file0.reg_file[31]": 0,
+            "reg_file0.reg_file[5]": 8,
+        },
+        36: {
+            "pc0.pc": 0x0B4,
+            "reg_file0.reg_file[0]": 0,
+            "reg_file0.reg_file[20]": 2,
+            "reg_file0.reg_file[21]": 3,
+            "reg_file0.reg_file[22]": 4,
+            "mem0.mem[66]": 2,
+        },
+    }
+    steps = [
+        Step(
+            inputs={"clk": 0, "rst": 1},
+            probes={"pc0.pc": 0, "reg_file0.reg_file[0]": 0},
+        ),
+        Step(inputs={"clk": 1}, probes={"pc0.pc": 0}),
+        Step(inputs={"clk": 0, "rst": 0}),
+    ]
+    for executed_instruction in range(1, 37):
+        steps.append(
+            Step(
+                inputs={"clk": 1},
+                probes=checkpoints.get(executed_instruction, {}),
+            )
+        )
+        if executed_instruction != 36:
+            steps.append(Step(inputs={"clk": 0}))
+    return steps
 
 
 @module(
@@ -244,8 +350,9 @@ def mem(
     """Describe a unified instruction and data storage block.
 
     The block contains one internal 32-bit-wide storage array named mem with
-    4096 word entries. Initialize that storage from ./problem/inst.dat using
-    hexadecimal text. The instruction side reads the word indexed by
+    4096 word entries. Initialize that storage from
+    examples/python/problem/inst.dat using hexadecimal text. The instruction
+    side reads the word indexed by
     im_addr[13:2] and drives im_dout. The data side reads the word indexed by
     dm_addr[13:2] in the same cycle. Data writes are synchronous on clk.
 
@@ -323,44 +430,9 @@ def ctrl(inst: In[32]) -> {
 @module(
     patterns=[
         Sequence(
-            name="execute_arithmetic_and_store_program",
-            fixtures=[
-                MemoryFixture(
-                    "mem0.mem",
-                    {
-                        0: 0x00500093,  # addi x1, x0, 5
-                        1: 0x00308113,  # addi x2, x1, 3
-                        2: 0x00202023,  # sw x2, 0(x0)
-                        3: 0x0000006F,  # jal x0, 0
-                    },
-                )
-            ],
-            steps=[
-                Step(
-                    inputs={"clk": 0, "rst": 1},
-                    probes={"pc0.pc": 0, "reg_file0.reg_file[0]": 0},
-                ),
-                Step(inputs={"clk": 1}, probes={"pc0.pc": 0}),
-                Step(inputs={"clk": 0, "rst": 0}),
-                Step(
-                    inputs={"clk": 1},
-                    probes={"pc0.pc": 4, "reg_file0.reg_file[1]": 5},
-                ),
-                Step(inputs={"clk": 0}),
-                Step(
-                    inputs={"clk": 1},
-                    probes={"pc0.pc": 8, "reg_file0.reg_file[2]": 8},
-                ),
-                Step(inputs={"clk": 0}),
-                Step(
-                    inputs={"clk": 1},
-                    probes={
-                        "pc0.pc": 12,
-                        "reg_file0.reg_file[0]": 0,
-                        "mem0.mem[0]": 8,
-                    },
-                ),
-            ],
+            name="execute_problem_instruction_image",
+            fixtures=[MemoryFixture("mem0.mem", PROGRAM_WORDS)],
+            steps=cpu_program_steps(),
         )
     ]
 )
@@ -420,8 +492,10 @@ design = Design(
     agent_config=AgentConfig(
         max_parallelism=2,
         fail_fast=False,
-        request_timeout=180,
-        module_deadline_seconds=900,
+        request_timeout=300,
+        transport_retries=4,
+        output_tokens=8000,
+        module_deadline_seconds=1800,
         max_module_tokens=120000,
     )
 )

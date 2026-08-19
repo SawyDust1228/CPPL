@@ -112,8 +112,20 @@ design.add(ALU)
 report = design.compile_with_report(max_retries=3)
 print(report.llm_calls, report.cache_hits)
 for name, module_report in report.module_reports.items():
-    print(name, module_report.status, module_report.attempts)
+    print(
+        name,
+        module_report.status,
+        module_report.attempts,             # total LLM generation calls
+        module_report.simulation_attempts,  # candidates checked by patterns
+        module_report.static_repairs,       # JSON/schema/SSA/width repairs
+    )
 ```
+
+`max_retries` limits only executable simulation/pattern attempts. JSON syntax,
+schema, SSA, port, instance, and width errors are sent back to the Repair Agent
+without consuming this counter; those repairs continue until valid or until the
+module time/token budget is exhausted. `CompileOptions.max_simulation_attempts`
+provides the equivalent per-run override.
 
 Python configuration overrides `CPPL_AGENT_*` environment variables. Reports
 contain timing, token estimates, cache and diagnostic metadata, but never store
@@ -124,7 +136,7 @@ and Verilog output on `stdout` remains clean:
 
 ```text
 [CPPL    0.02s] START    — compiling 2 module(s)
-[CPPL    0.05s] GENERATE Adder8 — attempt 1/3
+[CPPL    0.05s] GENERATE Adder8 — generation call 1; next simulation attempt 1/3
 [CPPL    1.24s] SUCCESS  Adder8 — validated in 1.19s
 [CPPL    2.12s] DONE     — 2 module(s), 2 LLM call(s), 0 cache hit(s) in 2.10s
 ```

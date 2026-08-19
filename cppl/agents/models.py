@@ -22,10 +22,6 @@ class GenerationBudgetError(AgentRuntimeError):
     """A module exhausted its total generation time or token budget."""
 
 
-class RepeatedFailureError(AgentRuntimeError):
-    """A repair attempt reproduced an already rejected candidate failure."""
-
-
 def env_int(name: str, default: int) -> int:
     value = resolve_env_value(name)
     return int(value) if value is not None else default
@@ -215,10 +211,16 @@ class ResolvedAgentConfig:
 
 @dataclass(frozen=True)
 class CompileOptions:
-    """Per-run controls for resumable compilation."""
+    """Per-run controls for resumable compilation.
+
+    ``max_simulation_attempts`` limits candidates that reach executable pattern
+    checking. ``max_semantic_attempts`` is retained as a compatibility alias.
+    Static JSON/IR repair is bounded only by the module time/token budgets.
+    """
 
     run_id: Optional[str] = None
     resume: bool = True
+    max_simulation_attempts: Optional[int] = None
     max_semantic_attempts: Optional[int] = None
     module_deadline_seconds: Optional[float] = None
 
@@ -260,8 +262,13 @@ class CompiledModuleArtifact:
 @dataclass
 class ModuleCompileReport:
     module_name: str
+    # Total LLM generation calls, including syntax/IR repair calls.
     status: str = "queued"
     attempts: int = 0
+    # Candidates that reached executable pattern simulation. max_retries limits this.
+    simulation_attempts: int = 0
+    # JSON/schema/SSA/width/interface repairs do not consume simulation attempts.
+    static_repairs: int = 0
     compression_calls: int = 0
     transport_retries: int = 0
     duration_seconds: float = 0.0

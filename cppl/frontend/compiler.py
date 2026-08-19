@@ -29,6 +29,8 @@ class CompileResult:
     success: bool = False
     error: Optional[str] = None
     attempts: int = 0
+    simulation_attempts: int = 0
+    static_repairs: int = 0
     report: Optional[ModuleCompileReport] = None
 
 
@@ -77,6 +79,8 @@ def result_from_report(report: ModuleCompileReport) -> CompileResult:
         success=report.success,
         error=report.error,
         attempts=report.attempts,
+        simulation_attempts=report.simulation_attempts,
+        static_repairs=report.static_repairs,
         report=report,
     )
 

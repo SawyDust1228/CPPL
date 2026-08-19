@@ -265,7 +265,10 @@ class CompilationCoordinator:
                 return module_graph.invoke(
                     module_input,
                     config={
-                        "recursion_limit": max(25, module_graph.max_retries * 3 + 10)
+                        # Static repair calls are bounded by time/token budgets rather
+                        # than max_retries, so the graph recursion ceiling must not
+                        # become an accidental syntax-retry limit.
+                        "recursion_limit": 10000
                     },
                 )
 
@@ -383,6 +386,8 @@ class CompilationCoordinator:
                                     "status": report.status,
                                     "patterns_checked": report.patterns_checked,
                                     "attempts": report.attempts,
+                                    "simulation_attempts": report.simulation_attempts,
+                                    "static_repairs": report.static_repairs,
                                     "artifact_hash": report.artifact_hash,
                                     "dependency_hashes": report.dependency_hashes,
                                     "error_category": report.error_category,
@@ -512,11 +517,24 @@ class CompilationCoordinator:
         max_retries: int = 3,
         options: CompileOptions | None = None,
     ) -> CompilationReport:
-        if max_retries <= 0:
-            raise ValueError("max_retries must be positive")
         options = options or CompileOptions()
-        if options.max_semantic_attempts is not None:
-            max_retries = options.max_semantic_attempts
+        if (
+            options.max_simulation_attempts is not None
+            and options.max_semantic_attempts is not None
+            and options.max_simulation_attempts != options.max_semantic_attempts
+        ):
+            raise ValueError(
+                "max_simulation_attempts and legacy max_semantic_attempts disagree"
+            )
+        configured_simulation_attempts = (
+            options.max_simulation_attempts
+            if options.max_simulation_attempts is not None
+            else options.max_semantic_attempts
+        )
+        if configured_simulation_attempts is not None:
+            max_retries = configured_simulation_attempts
+        if max_retries <= 0:
+            raise ValueError("max_retries/max_simulation_attempts must be positive")
         if options.module_deadline_seconds is not None:
             object.__setattr__(
                 self.config, "module_deadline_seconds", options.module_deadline_seconds

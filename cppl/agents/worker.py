@@ -25,7 +25,6 @@ from .models import (
     DiagnosticPacket,
     GenerationBudgetError,
     ModuleCompileReport,
-    RepeatedFailureError,
     ResolvedAgentConfig,
 )
 from ..harness import CompileEventEmitter
@@ -34,6 +33,7 @@ from ..frontend.module import InstanceCall, ModuleDef
 from ..ir.errors import (
     CircuitPPLError,
     DiagnosticIssue,
+    PatternMismatch,
     ValidationError,
     issues_from_errors,
 )
@@ -239,13 +239,13 @@ class ModuleAgentGraph:
         config: ResolvedAgentConfig,
         backend_factory: Callable[[], LLMBackend],
         cache: ModuleCache,
-        max_retries: int,
+        max_simulation_attempts: int,
         events: CompileEventEmitter,
     ) -> None:
         self.config = config
         self.backend_factory = backend_factory
         self.cache = cache
-        self.max_retries = max_retries
+        self.max_simulation_attempts = max_simulation_attempts
         self.events = events
         self.graph = self._build_graph().compile()
 
@@ -512,22 +512,33 @@ class ModuleAgentGraph:
             self._check_budget(state)
         except GenerationBudgetError as exc:
             return self._failure(state, exc)
-        attempt = report.attempts + 1
-        report.attempts = attempt
-        report.status = "generating" if attempt == 1 else "repairing"
+        generation_call = report.attempts + 1
+        report.attempts = generation_call
+        report.status = "generating" if generation_call == 1 else "repairing"
         report.validation_stage = report.status
-        event_kind = "generate" if attempt == 1 else "repair"
-        message = f"attempt {attempt}/{self.max_retries}"
+        event_kind = "generate" if generation_call == 1 else "repair"
+        next_simulation_attempt = min(
+            report.simulation_attempts + 1, self.max_simulation_attempts
+        )
+        message = (
+            f"generation call {generation_call}; next simulation attempt "
+            f"{next_simulation_attempt}/{self.max_simulation_attempts}"
+        )
         diagnostic = state.get("diagnostic")
-        if diagnostic is not None and attempt > 1:
+        if diagnostic is not None and generation_call > 1:
             message += f" after {diagnostic.category}"
         self.events.emit(
             event_kind,
             module_name=state["mod"].name,
             stage=report.status,
-            attempt=attempt,
+            attempt=generation_call,
             message=message,
-            metadata={"max_attempts": self.max_retries},
+            metadata={
+                "generation_call": generation_call,
+                "simulation_attempts": report.simulation_attempts,
+                "max_simulation_attempts": self.max_simulation_attempts,
+                "static_repairs": report.static_repairs,
+            },
         )
         try:
             response = invoke_generation_backend(
@@ -543,7 +554,7 @@ class ModuleAgentGraph:
             "validate",
             module_name=state["mod"].name,
             stage="validating",
-            attempt=attempt,
+            attempt=generation_call,
             message="checking JSON-IR and executable patterns",
         )
         return {"response_text": response.text, "report": report, "route": "validate"}
@@ -556,32 +567,38 @@ class ModuleAgentGraph:
             candidate = validate_ir_body(candidate)
             module_dict, patterns_checked = self._materialize(state, candidate)
         except (OutputParserException, IRSchemaError, ValueError, CircuitPPLError) as exc:
+            simulation_failure = isinstance(exc, PatternMismatch)
+            if simulation_failure:
+                report.simulation_attempts += 1
+            else:
+                report.static_repairs += 1
             diagnostic = diagnostic_from_exception(exc, candidate)
             report.failure_fingerprints.append(diagnostic.fingerprint)
             report.failure_origin = (
                 "hierarchy" if state.get("direct_dependencies") else "module"
             )
             if (
-                report.failure_fingerprints.count(diagnostic.fingerprint) > 1
-                and report.attempts < self.max_retries
+                simulation_failure
+                and report.simulation_attempts >= self.max_simulation_attempts
             ):
-                return self._failure(
-                    state,
-                    RepeatedFailureError(
-                        f"Module '{state['mod'].name}' reproduced validation failure "
-                        f"{diagnostic.fingerprint}; stopping repair early: {exc}"
-                    ),
-                    candidate=candidate or [],
-                )
-            if report.attempts >= self.max_retries:
                 return self._failure(state, exc, candidate=candidate or [])
+            next_simulation_attempt = min(
+                report.simulation_attempts + 1, self.max_simulation_attempts
+            )
             self.events.emit(
                 "repair_scheduled",
                 module_name=state["mod"].name,
                 stage="repairing",
                 attempt=report.attempts + 1,
                 message=f"{type(exc).__name__}: {str(exc)[:180]}",
-                metadata={"category": type(exc).__name__},
+                metadata={
+                    "category": type(exc).__name__,
+                    "consumed_simulation_attempt": simulation_failure,
+                    "simulation_attempts": report.simulation_attempts,
+                    "next_simulation_attempt": next_simulation_attempt,
+                    "max_simulation_attempts": self.max_simulation_attempts,
+                    "static_repairs": report.static_repairs,
+                },
             )
             return {
                 "candidate": candidate or [],
@@ -589,6 +606,8 @@ class ModuleAgentGraph:
                 "report": report,
                 "route": "repair",
             }
+        if state["mod"].patterns:
+            report.simulation_attempts += 1
         report.status = "success"
         report.validation_stage = "published"
         report.module_dict = module_dict
@@ -609,7 +628,9 @@ class ModuleAgentGraph:
             attempt=report.attempts,
             message=f"validated in {report.duration_seconds:.2f}s",
             metadata={
-                "attempts": report.attempts,
+                "generation_calls": report.attempts,
+                "simulation_attempts": report.simulation_attempts,
+                "static_repairs": report.static_repairs,
                 "patterns_checked": report.patterns_checked,
             },
         )

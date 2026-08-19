@@ -280,6 +280,8 @@ class TestCompilePatternLoop:
 
         assert report.success
         assert report.module_reports["Branch"].attempts == 2
+        assert report.module_reports["Branch"].simulation_attempts == 1
+        assert report.module_reports["Branch"].static_repairs == 1
         repair = FakeBackend.prompts[1]
         assert repair["diagnostic"]["details"]["issue_count"] == 1
         issue = repair["diagnostic"]["details"]["issues"][0]
@@ -315,6 +317,8 @@ class TestCompilePatternLoop:
 
         assert report.success
         assert report.module_reports["M"].attempts == 2
+        assert report.module_reports["M"].simulation_attempts == 2
+        assert report.module_reports["M"].static_repairs == 0
         assert report.module_reports["M"].patterns_checked == 1
         assert FakeBackend.prompts[0]["patterns"][0]["name"] == "plus_one"
         assert "output_contract" not in FakeBackend.prompts[0]
@@ -347,8 +351,62 @@ class TestCompilePatternLoop:
         module_report = report.module_reports["M"]
         assert not report.success
         assert module_report.error_category == "PatternMismatch"
+        assert module_report.attempts == 2
+        assert module_report.simulation_attempts == 2
+        assert module_report.static_repairs == 0
         assert module_report.module_dict is None
         assert not (tmp_path / "cache").exists()
+
+    def test_static_errors_do_not_consume_simulation_retry_budget(self, tmp_path):
+        @module(patterns=[Case({"a": 1}, {"out": 2})])
+        def M(a: In[8]) -> Out[8]:
+            """out equals a plus one."""
+            pass
+
+        FakeBackend.responses = [
+            "not-json",
+            json.dumps([{"id": "1", "op": "constant", "value": 1, "width": 8}]),
+            json.dumps([{"op": "output", "args": {"wrong": "missing"}}]),
+            json.dumps(
+                [
+                    {"id": "one", "op": "constant", "value": 1, "width": 8},
+                    {"id": "sum", "op": "add", "args": ["a", "one"]},
+                    {"op": "output", "args": {"out": "sum"}},
+                ]
+            ),
+        ]
+        report = CompilationCoordinator(
+            agent_test_config(tmp_path),
+            backend_factory=FakeBackend,
+            model_identity={"model": "fake"},
+        ).compile([M], max_retries=1)
+
+        module_report = report.module_reports["M"]
+        assert report.success
+        assert module_report.attempts == 4
+        assert module_report.static_repairs == 3
+        assert module_report.simulation_attempts == 1
+
+    def test_compile_option_can_override_simulation_attempt_limit(self, tmp_path):
+        @module(patterns=[Case({"a": 1}, {"out": 2})])
+        def M(a: In[8]) -> Out[8]:
+            """out equals a plus one."""
+            pass
+
+        bad = json.dumps([{"op": "output", "args": {"out": "a"}}])
+        FakeBackend.responses = [bad]
+        report = CompilationCoordinator(
+            agent_test_config(tmp_path),
+            backend_factory=FakeBackend,
+            model_identity={"model": "fake"},
+        ).compile(
+            [M],
+            max_retries=5,
+            options=CompileOptions(max_simulation_attempts=1),
+        )
+
+        assert not report.success
+        assert report.module_reports["M"].simulation_attempts == 1
 
     def test_cache_hit_revalidates_pattern(self, tmp_path, monkeypatch):
         @module(patterns=[Case({"a": 4}, {"out": 4})])

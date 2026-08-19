@@ -246,13 +246,18 @@ def test_failed_branch_blocks_only_its_ancestors_when_fail_fast_is_disabled(tmp_
         return f"out equals {bad}."
 
     class Backend:
+        bad_calls = 0
+
         def __init__(self, resolved):
             pass
 
         def generate(self, system_prompt, user_prompt, *, output_tokens=None):
             module_name = json.loads(user_prompt)["module"]
             if module_name == "Bad":
-                return BackendResponse("not-json", 0)
+                self.__class__.bad_calls += 1
+                if self.__class__.bad_calls == 1:
+                    return BackendResponse("not-json", 0)
+                raise RuntimeError("provider stopped after syntax repair")
             return BackendResponse(
                 json.dumps([{"op": "output", "args": {"out": "x"}}]), 0
             )
@@ -265,6 +270,9 @@ def test_failed_branch_blocks_only_its_ancestors_when_fail_fast_is_disabled(tmp_
 
     assert not report.success
     assert report.module_reports["Bad"].status == "failed"
+    assert report.module_reports["Bad"].attempts == 2
+    assert report.module_reports["Bad"].simulation_attempts == 0
+    assert report.module_reports["Bad"].static_repairs == 1
     assert report.module_reports["Good"].status == "success"
     assert report.module_reports["BadParent"].status == "blocked"
     assert report.module_reports["BadParent"].failure_origin == "dependency"
