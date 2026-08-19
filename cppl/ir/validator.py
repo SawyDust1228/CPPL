@@ -303,10 +303,12 @@ def check_arguments_defined(op: Operation, defined: Set[str], loc: str) -> None:
         for i, (addr, enable) in enumerate(op.reads):
             undefined(addr, f"reads[{i}].addr")
             undefined(enable, f"reads[{i}].enable")
-        for i, (addr, data, enable) in enumerate(op.writes):
+        for i, (addr, data, enable, mask) in enumerate(op.writes):
             undefined(addr, f"writes[{i}].addr")
             undefined(data, f"writes[{i}].data")
             undefined(enable, f"writes[{i}].enable")
+            if mask:
+                undefined(mask, f"writes[{i}].mask")
     else:
         # UnaryOp, BinaryOp, VariadicOp, ExtractOp — all have args as list[str]
         for arg in op.args:

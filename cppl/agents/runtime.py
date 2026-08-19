@@ -388,6 +388,11 @@ class CompilationCoordinator:
                                     "attempts": report.attempts,
                                     "simulation_attempts": report.simulation_attempts,
                                     "static_repairs": report.static_repairs,
+                                    "model_turns": report.model_turns,
+                                    "tool_calls": report.tool_calls,
+                                    "tool_failures": report.tool_failures,
+                                    "tool_counts": report.tool_counts,
+                                    "tool_fallback_reason": report.tool_fallback_reason,
                                     "artifact_hash": report.artifact_hash,
                                     "dependency_hashes": report.dependency_hashes,
                                     "error_category": report.error_category,
@@ -464,7 +469,7 @@ class CompilationCoordinator:
                 module_reports=reports,
                 duration_seconds=time.monotonic() - state["started"],
                 llm_calls=sum(
-                    report.attempts + report.compression_calls
+                    report.model_turns
                     for report in reports.values()
                 ),
                 cache_hits=sum(1 for report in reports.values() if report.cache_hit),

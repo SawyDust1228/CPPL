@@ -95,6 +95,7 @@ class WritePortSchema(StrictModel):
     addr: Operand
     data: Operand
     enable: Operand
+    mask: Operand | None = None
 
 
 class MemSchema(StrictModel):

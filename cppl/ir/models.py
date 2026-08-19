@@ -93,7 +93,7 @@ class MemOp:
     clock: str  # clock signal ref
     reset: str  # optional reset signal ref
     reads: tuple  # ((addr_ref, enable_ref), ...)
-    writes: tuple  # ((addr_ref, data_ref, enable_ref), ...)
+    writes: tuple  # ((addr_ref, data_ref, enable_ref, mask_ref), ...)
     name: str = ""
     initFile: str = ""
     initFormat: str = "hex"

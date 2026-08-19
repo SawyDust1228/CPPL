@@ -15,8 +15,8 @@ from ..frontend.module import InstanceCall, ModuleDef
 from ..frontend.patterns import pattern_as_dict
 
 
-PROMPT_VERSION = "cppl-agent-v2.3-output-keys"
-IR_VERSION = "json-ir-v1"
+PROMPT_VERSION = "cppl-agent-v4-masked-memory"
+IR_VERSION = "json-ir-v2"
 
 COMPACT_SYSTEM_PROMPT = r"""You compile one hardware module into a CPPL JSON-IR body.
 Return only one JSON array. The first character must be [ and the last must be ].
@@ -33,16 +33,35 @@ binary add/sub/mul/div/div_s/mod_u/mod_s/and/or/xor/shl/shr_u/shr_s/eq/ne/lt_s/l
 concat{id,op,args:[msb,...,lsb]}; extract{id,op,args:[x],lowBit,width};
 mux{id,op,args:[sel,true,false]}; sext/zext{id,op,args:[x],width};
 reg{id,op,args:[data],clock,reset?,resetValue?,enable?,width?};
-mem{id:[read_ids],op,width,depth,clock,reset?,name?,initFile?,initFormat?,reads:[{addr,enable}],writes:[{addr,data,enable}]};
+mem{id:[read_ids],op,width,depth,clock,reset?,name?,initFile?,initFormat?,reads:[{addr,enable}],writes:[{addr,data,enable,mask?}]};
 instance{id:[output_ids],op,module,name?,args:{child_input:value_id}};
 output{op:"output",args:{output_port:value_id}}.
 
-Binary operands must have equal widths; comparisons and reductions return 1 bit; mux select is 1 bit; concat is MSB to LSB. Decimal JSON numbers may be used in operand positions and will be converted to typed constants. Preserve every required instance exactly. Do not emit comments, markdown, prose, or a module wrapper."""
+For a masked memory write, mask has the memory element width: 1 bits update the
+corresponding stored bits from data and 0 bits preserve old stored bits. Omit mask
+for a full-width write. Binary operands must have equal widths; comparisons and
+reductions return 1 bit; mux select is 1 bit; concat is MSB to LSB. Decimal JSON
+numbers may be used in operand positions and will be converted to typed constants.
+Preserve every required instance exactly. Do not emit comments, markdown, prose,
+or a module wrapper."""
+
+TOOL_SYSTEM_SUFFIX = r"""
+
+When JSON-IR tools are available, use them to build or repair the candidate, inspect
+focused values, validate the result, and call submit_ir only after it is ready. Tool
+errors are actionable validation feedback. The candidate persists across tool rounds
+and repair sessions: prefer focused patch_ir edits over replacing a mostly-correct
+candidate. Bracket notation such as x[1] is never an SSA reference; create an extract
+operation first. Never emit shell commands or attempt to access paths; only use the
+named tools. You may still return one complete JSON array directly when tools are
+unavailable."""
+
+GENERATION_SYSTEM_PROMPT = COMPACT_SYSTEM_PROMPT + TOOL_SYSTEM_SUFFIX
 
 COMPRESSION_SYSTEM_PROMPT = r"""Compress one source chunk of hardware requirements without changing or omitting any behavior, encoding, width, reset, timing, memory, or interface constraint. Return only JSON: {"sources":["Rxxx"],"requirements":["atomic requirement",...]}. Preserve the supplied source ID exactly. Do not invent requirements."""
 
 GENERATION_PROMPT = ChatPromptTemplate.from_messages(
-    [("system", COMPACT_SYSTEM_PROMPT), ("human", "{{{payload}}}")],
+    [("system", GENERATION_SYSTEM_PROMPT), ("human", "{{{payload}}}")],
     template_format="mustache",
 )
 COMPRESSION_PROMPT = ChatPromptTemplate.from_messages(
@@ -262,7 +281,7 @@ def build_agent_context(
             )
 
     user_prompt = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    estimate = estimate_tokens(COMPACT_SYSTEM_PROMPT) + estimate_tokens(user_prompt)
+    estimate = estimate_tokens(GENERATION_SYSTEM_PROMPT) + estimate_tokens(user_prompt)
 
     if estimate > config.input_budget_tokens:
         raise ContextBudgetError(

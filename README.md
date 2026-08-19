@@ -106,6 +106,8 @@ design = Design(agent_config=AgentConfig(
     max_parallelism=4,
     context_window_tokens=32768,
     cache_enabled=True,
+    tool_mode="auto",       # auto | off | required
+    max_tool_rounds=12,
 ))
 design.add(ALU)
 
@@ -115,7 +117,9 @@ for name, module_report in report.module_reports.items():
     print(
         name,
         module_report.status,
-        module_report.attempts,             # total LLM generation calls
+        module_report.attempts,             # generation/repair sessions
+        module_report.model_turns,           # actual provider requests
+        module_report.tool_calls,            # isolated IR tool calls
         module_report.simulation_attempts,  # candidates checked by patterns
         module_report.static_repairs,       # JSON/schema/SSA/width repairs
     )
@@ -130,6 +134,19 @@ provides the equivalent per-run override.
 Python configuration overrides `CPPL_AGENT_*` environment variables. Reports
 contain timing, token estimates, cache and diagnostic metadata, but never store
 API keys or complete prompts/responses.
+
+Tool-capable models can incrementally construct and repair JSON-IR through an
+isolated module-local session. The always-available tools cover replacement,
+JSON Patch edits, JSON Pointer queries, validation, pattern simulation, and
+submission. If `jq`, `rg`, or `diff` are installed they are used as bounded
+Unix enhancements; they are optional and are never invoked through a shell.
+Tools operate only on temporary candidate snapshots and cannot modify project
+files. In the default `auto` mode, models or custom backends without native tool
+calling transparently use the existing structured/direct JSON generation path.
+
+The corresponding environment controls are `CPPL_AGENT_TOOL_MODE`,
+`CPPL_AGENT_MAX_TOOL_ROUNDS`, `CPPL_AGENT_TOOL_TIMEOUT`, and
+`CPPL_AGENT_MAX_TOOL_OUTPUT_CHARS`.
 
 Compilation logs are enabled by default and written to `stderr`, so JSON, MLIR,
 and Verilog output on `stdout` remains clean:
@@ -227,12 +244,16 @@ The `mem` op creates register-array memories with configurable read/write ports:
   "clock": "clk",
   "reset": "rst",
   "reads": [{"addr": "raddr", "enable": "ren"}],
-  "writes": [{"addr": "waddr", "data": "wdata", "enable": "wen"}]
+  "writes": [
+    {"addr": "waddr", "data": "wdata", "enable": "wen", "mask": "wmask"}
+  ]
 }
 ```
 
 - `id` has one entry per read port; each output is `width` bits wide
 - `reads`: combinational read ports (latency 0); `writes`: synchronous write ports (latency 1)
+- `mask` is optional and `width` bits wide; `1` updates the corresponding stored
+  bit from `data`, while `0` preserves the old stored bit
 - Generates CIRCT `seq.hlmem` ops, lowered to `sv.reg` arrays in Verilog
 
 ## Dependencies

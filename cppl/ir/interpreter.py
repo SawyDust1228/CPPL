@@ -32,7 +32,7 @@ from .models import (
     VariadicOp,
 )
 from .parser import parse_design
-from .validator import validate_design
+from .validator import module_output_input_dependencies, validate_design
 
 
 _MAX_DELTA_CYCLES = 100
@@ -105,6 +105,7 @@ class Interpreter:
         validate_design(self.modules)
         self.widths = widths if widths is not None else infer_widths(self.modules)
         self._modules_by_name = {module.name: module for module in self.modules}
+        self._dependency_cache: Dict[str, Dict[str, set[str]]] = {}
         self.check_recursive_instances()
         self.top = self.select_top(top)
         self.base_dir = Path(base_dir) if base_dir is not None else Path.cwd()
@@ -405,25 +406,42 @@ class Interpreter:
                     env[op.id] = self.evaluate_cast(op, env, widths)
                 elif isinstance(op, ExtractOp) and self.arguments_ready(op.args, env):
                     env[op.id] = truncate_value(env[op.args[0]] >> op.lowBit, op.width)
-                elif isinstance(op, MemOp) and self.memory_read_arguments_ready(
-                    op, env
-                ):
+                elif isinstance(op, MemOp):
                     memory = instance.memories[index]
+                    produced = False
                     for output_id, (addr_ref, enable_ref) in zip(op.id, op.reads):
+                        if output_id in env:
+                            continue
+                        if addr_ref not in env or enable_ref not in env:
+                            continue
                         if env[enable_ref]:
                             address = env[addr_ref]
                             self.check_address(address, op, instance.path, "read")
                             env[output_id] = memory.values[address]
                         else:
                             env[output_id] = 0
+                        produced = True
+                    if not all(output_id in env for output_id in op.id):
+                        next_pending.append((index, op))
+                    if not produced:
+                        continue
                 elif isinstance(op, InstanceOp):
                     child = instance.children[index]
                     child_inputs = {
                         name: env[ref] for name, ref in op.args.items() if ref in env
                     }
+                    inputs_changed = any(
+                        child.inputs.get(name) != value
+                        for name, value in child_inputs.items()
+                    )
                     child.inputs.update(child_inputs)
                     child_outputs = self.evaluate_instance(
-                        child, child_inputs, allow_partial=True
+                        child, child.inputs, allow_partial=True
+                    )
+                    output_dependencies = module_output_input_dependencies(
+                        child.module,
+                        self._modules_by_name,
+                        self._dependency_cache,
                     )
                     output_names = [
                         name
@@ -432,19 +450,31 @@ class Interpreter:
                     ]
                     produced = False
                     for output_id, output_name in zip(op.id, output_names):
-                        if output_name in child_outputs and output_id not in env:
+                        required_inputs = output_dependencies.get(output_name, set())
+                        dependencies_ready = all(
+                            op.args.get(input_name) in env
+                            for input_name in required_inputs
+                        )
+                        if (
+                            dependencies_ready
+                            and output_name in child_outputs
+                            and output_id not in env
+                        ):
                             env[output_id] = child_outputs[output_name]
                             produced = True
-                    if not all(output_id in env for output_id in op.id):
+                    if (
+                        not all(output_id in env for output_id in op.id)
+                        or not all(ref in env for ref in op.args.values())
+                    ):
                         next_pending.append((index, op))
-                    if not produced:
+                    if not produced and not inputs_changed:
                         continue
                 else:
                     next_pending.append((index, op))
                     continue
                 progress = True
 
-            if not progress:
+            if not progress and next_pending:
                 if allow_partial:
                     break
                 unresolved = ", ".join(
@@ -470,10 +500,6 @@ class Interpreter:
     @staticmethod
     def arguments_ready(args: object, env: Mapping[str, int]) -> bool:
         return all(arg in env for arg in args)
-
-    @staticmethod
-    def memory_read_arguments_ready(op: MemOp, env: Mapping[str, int]) -> bool:
-        return all(addr in env and enable in env for addr, enable in op.reads)
 
     def evaluate_unary(
         self, op: UnaryOp, env: Mapping[str, int], widths: Mapping[str, ValueInfo]
@@ -639,7 +665,7 @@ class Interpreter:
                     continue
 
                 writes: Dict[int, int] = {}
-                for addr_ref, data_ref, enable_ref in op.writes:
+                for addr_ref, data_ref, enable_ref, mask_ref in op.writes:
                     if not env[enable_ref]:
                         continue
                     address = env[addr_ref]
@@ -649,7 +675,14 @@ class Interpreter:
                             f"Conflicting writes to address {address} in memory "
                             f"'{instance.path}.{memory.public_name}'"
                         )
-                    writes[address] = truncate_value(env[data_ref], op.width)
+                    data = truncate_value(env[data_ref], op.width)
+                    if mask_ref:
+                        mask = truncate_value(env[mask_ref], op.width)
+                        old = memory.values[address]
+                        data = truncate_value(
+                            (old & ~mask) | (data & mask), op.width
+                        )
+                    writes[address] = data
                 if writes:
 
                     def update_memory(
@@ -685,7 +718,7 @@ class Interpreter:
         if not isinstance(path, str) or not path:
             raise SimulationError("Path must be a non-empty string")
         parts = path.split(".")
-        if parts[0] == self.top:
+        if len(parts) > 1 and parts[0] == self.top:
             parts = parts[1:]
         if not parts:
             raise SimulationError(f"Path '{path}' does not name a value")
@@ -698,7 +731,7 @@ class Interpreter:
         return instance, parts[-1]
 
     def normalize_hierarchy_path(self, path: str) -> str:
-        if path == self.top or path.startswith(self.top + "."):
+        if path.startswith(self.top + "."):
             return path
         return f"{self.top}.{path}"
 

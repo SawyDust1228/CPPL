@@ -123,7 +123,8 @@ Register captures data on the rising edge of clock, subject to enable and reset.
  "clock": "<clk_id>", "reset": "<rst_id>", "name": "<rtl_array_name>",
  "initFile": "<optional_readmem_file>", "initFormat": "hex",
  "reads": [{"addr": "<addr_id>", "enable": "<ren_id>"}],
- "writes": [{"addr": "<addr_id>", "data": "<wdata_id>", "enable": "<wen_id>"}]}
+ "writes": [{"addr": "<addr_id>", "data": "<wdata_id>", "enable": "<wen_id>",
+             "mask": "<optional_bit_mask_id>"}]}
 ```
 - Creates a register-array memory with D entries of N bits each
 - `id` has one entry per read port (each output is N bits wide)
@@ -140,6 +141,9 @@ Register captures data on the rising edge of clock, subject to enable and reset.
   4096-entry memory, use 12-bit addresses such as bits `[13:2]` of a byte
   address, not the original 32-bit byte address.
 - Read/write enables must be 1-bit; write data must be N bits wide
+- Optional write `mask` must be N bits wide. A 1 bit updates the corresponding
+  stored bit from `data`; a 0 bit preserves the old stored bit. Omit `mask` for
+  a full-width write.
 
 ### instance (module instantiation)
 ```json

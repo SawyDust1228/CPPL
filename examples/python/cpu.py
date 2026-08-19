@@ -372,7 +372,9 @@ def mem(
 
     Use little-endian byte lanes. For stores, preserve all byte lanes that are
     not selected by dm_wr_ctrl and dm_addr. Store enable is active whenever
-    dm_wr_ctrl is not 00.
+    dm_wr_ctrl is not 00. Use the memory write port's optional 32-bit mask for
+    sb/sh preservation: mask bit 1 updates that stored bit and mask bit 0 keeps
+    the old stored bit. Omit the mask only for an unconditional full-word write.
     """
     pass
 
@@ -384,7 +386,11 @@ def mem(
         Case(name="jal", inputs={"inst": 0x014000EF}, outputs={"rf_wr_en": 1, "rf_wr_sel": 1, "do_jump": 1, "alu_a_sel": 0, "alu_b_sel": 1, "alu_ctrl": 0}),
         Case(name="jalr", inputs={"inst": 0x008100E7}, outputs={"rf_wr_en": 1, "rf_wr_sel": 1, "do_jump": 1, "alu_a_sel": 1, "alu_b_sel": 1, "alu_ctrl": 0}),
         Case(name="beq", inputs={"inst": 0xFE2088E3}, outputs={"rf_wr_en": 0, "do_jump": 0, "BrType": 1, "alu_a_sel": 0, "alu_b_sel": 1, "alu_ctrl": 0}),
+        Case(name="bne", inputs={"inst": 0x00001063}, outputs={"rf_wr_en": 0, "BrType": 2}),
+        Case(name="blt", inputs={"inst": 0x00004063}, outputs={"rf_wr_en": 0, "BrType": 3}),
+        Case(name="bge", inputs={"inst": 0x00005063}, outputs={"rf_wr_en": 0, "BrType": 4}),
         Case(name="bltu", inputs={"inst": 0x0020E663}, outputs={"rf_wr_en": 0, "BrType": 5}),
+        Case(name="bgeu", inputs={"inst": 0x00007063}, outputs={"rf_wr_en": 0, "BrType": 6}),
         Case(name="lw", inputs={"inst": 0x00C12083}, outputs={"rf_wr_en": 1, "rf_wr_sel": 3, "alu_a_sel": 1, "alu_b_sel": 1, "alu_ctrl": 0, "dm_rd_ctrl": 5, "dm_wr_ctrl": 0}),
         Case(name="sw", inputs={"inst": 0xFE312C23}, outputs={"rf_wr_en": 0, "alu_a_sel": 1, "alu_b_sel": 1, "alu_ctrl": 0, "dm_rd_ctrl": 0, "dm_wr_ctrl": 3}),
         Case(name="addi", inputs={"inst": 0xFFC10093}, outputs={"rf_wr_en": 1, "rf_wr_sel": 2, "alu_a_sel": 1, "alu_b_sel": 1, "alu_ctrl": 0}),
@@ -496,7 +502,8 @@ design = Design(
         transport_retries=4,
         output_tokens=8000,
         module_deadline_seconds=1800,
-        max_module_tokens=120000,
+        max_module_tokens=300000,
+        max_tool_rounds=6,
     )
 )
 design.add(CPU)

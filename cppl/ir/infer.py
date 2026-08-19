@@ -163,8 +163,10 @@ def can_infer(op: Operation, env: Dict[str, ValueInfo]) -> bool:
         for addr, enable in op.reads:
             if addr not in env or enable not in env:
                 return False
-        for addr, data, enable in op.writes:
+        for addr, data, enable, mask in op.writes:
             if addr not in env or data not in env or enable not in env:
+                return False
+            if mask and mask not in env:
                 return False
         return True
     else:
@@ -309,7 +311,7 @@ def infer_operation(
                 raise WidthError(
                     f"{loc}: mem reads[{i}].enable '{enable}' must be 1-bit, got {en_w}"
                 )
-        for i, (addr, data, enable) in enumerate(op.writes):
+        for i, (addr, data, enable, mask) in enumerate(op.writes):
             addr_w = width_of(addr, env, loc)
             if addr_w != addr_width:
                 raise WidthError(
@@ -327,6 +329,13 @@ def infer_operation(
                     f"{loc}: mem writes[{i}].data '{data}' has width {data_w} "
                     f"but element width is {op.width}"
                 )
+            if mask:
+                mask_w = width_of(mask, env, loc)
+                if mask_w != op.width:
+                    raise WidthError(
+                        f"{loc}: mem writes[{i}].mask '{mask}' has width {mask_w} "
+                        f"but element width is {op.width}"
+                    )
         for id_name in op.id:
             env[id_name] = ValueInfo(
                 width=op.width,

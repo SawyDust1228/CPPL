@@ -276,6 +276,8 @@ def normalize_constants(
                 write["addr"] = normalize_ref(write.get("addr"), addr_width)
                 write["data"] = normalize_ref(write.get("data"), elem_width)
                 write["enable"] = normalize_ref(write.get("enable"), 1)
+                if write.get("mask") is not None:
+                    write["mask"] = normalize_ref(write.get("mask"), elem_width)
         elif opname == "instance":
             widths = instance_inputs.get(op.get("module"), {})
             for port, ref in op.get("args", {}).items():

@@ -420,13 +420,16 @@ def parse_memory_operation(raw: Dict[str, Any], loc: str) -> MemOp:
         addr = w.get("addr")
         data = w.get("data")
         enable = w.get("enable")
+        mask = w.get("mask", "")
         if not isinstance(addr, str) or not addr:
             raise ParseError(f"{loc}: 'writes[{i}].addr' must be a non-empty string")
         if not isinstance(data, str) or not data:
             raise ParseError(f"{loc}: 'writes[{i}].data' must be a non-empty string")
         if not isinstance(enable, str) or not enable:
             raise ParseError(f"{loc}: 'writes[{i}].enable' must be a non-empty string")
-        writes.append((addr, data, enable))
+        if not isinstance(mask, str):
+            raise ParseError(f"{loc}: 'writes[{i}].mask' must be a string")
+        writes.append((addr, data, enable, mask))
 
     if len(id_) != len(reads):
         raise ParseError(

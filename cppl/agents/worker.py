@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
+from dataclasses import replace
 import hashlib
+import json
 import re
 import time
 from typing import Callable, Optional, TypedDict
@@ -11,7 +12,7 @@ from typing import Callable, Optional, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langchain_core.exceptions import OutputParserException
 
-from .backend import LLMBackend
+from .backend import BackendResponse, LLMBackend
 from .cache import ModuleCache
 from .context import (
     JSON_OUTPUT_PARSER,
@@ -26,6 +27,12 @@ from .models import (
     GenerationBudgetError,
     ModuleCompileReport,
     ResolvedAgentConfig,
+)
+from .tools import (
+    IRToolSession,
+    ToolSessionError,
+    ToolSessionLimits,
+    candidate_hash,
 )
 from ..harness import CompileEventEmitter
 from ..frontend.const_analysis import normalize_constants
@@ -213,6 +220,9 @@ class ModuleAgentState(TypedDict, total=False):
     system_prompt: str
     user_prompt: str
     response_text: str
+    tool_pattern_hashes: tuple[str, ...]
+    pattern_results: dict[str, tuple[bool, int, str]]
+    force_direct_generation: bool
     route: str
 
 
@@ -222,13 +232,36 @@ def invoke_generation_backend(
     user_prompt: str,
     *,
     output_tokens: int | None = None,
+    tool_session: IRToolSession | None = None,
+    tool_mode: str = "auto",
 ):
+    tool_enabled = getattr(backend, "generate_with_tools", None)
+    fallback_reason = ""
+    if tool_session is not None and tool_mode != "off":
+        if callable(tool_enabled):
+            return tool_enabled(
+                system_prompt,
+                user_prompt,
+                tool_session,
+                output_tokens=output_tokens,
+            )
+        if tool_mode == "required":
+            raise ToolSessionError(
+                "The configured LLM backend does not implement tool calling."
+            )
+        fallback_reason = "backend tool calling is unavailable"
     structured = getattr(backend, "generate_structured", None)
     if callable(structured):
-        return structured(
+        response = structured(
             system_prompt, user_prompt, output_tokens=output_tokens
         )
-    return backend.generate(system_prompt, user_prompt, output_tokens=output_tokens)
+    else:
+        response = backend.generate(
+            system_prompt, user_prompt, output_tokens=output_tokens
+        )
+    if fallback_reason and isinstance(response, BackendResponse):
+        return replace(response, tool_fallback_reason=fallback_reason)
+    return response
 
 
 class ModuleAgentGraph:
@@ -253,6 +286,8 @@ class ModuleAgentGraph:
         self,
         state: ModuleAgentState,
         module_dict: dict,
+        *,
+        run_patterns_enabled: bool = True,
     ) -> int:
         dependency_modules = state.get("dependency_modules", [])
         real_names = {module["name"] for module in dependency_modules}
@@ -264,6 +299,8 @@ class ModuleAgentGraph:
         modules = parse_design(stubs + dependency_modules + [module_dict])
         validate_design(modules)
         widths = infer_widths(modules)
+        if not run_patterns_enabled:
+            return 0
         return run_patterns(
             modules,
             state["mod"].name,
@@ -271,7 +308,13 @@ class ModuleAgentGraph:
             widths=widths,
         )
 
-    def _materialize(self, state: ModuleAgentState, body: list) -> tuple[dict, int]:
+    def _materialize(
+        self,
+        state: ModuleAgentState,
+        body: list,
+        *,
+        run_patterns_enabled: bool = True,
+    ) -> tuple[dict, int]:
         missing = [
             inst
             for inst in state["deferred"]
@@ -310,7 +353,11 @@ class ModuleAgentGraph:
             "ports": state["ports"],
             "body": full_body,
         }
-        return module_dict, self._validate_candidate(state, module_dict)
+        return module_dict, self._validate_candidate(
+            state,
+            module_dict,
+            run_patterns_enabled=run_patterns_enabled,
+        )
 
     def _initialize(self, state: ModuleAgentState) -> dict:
         mod = state["mod"]
@@ -332,6 +379,9 @@ class ModuleAgentGraph:
             "candidate": None,
             "diagnostic": None,
             "description_override": None,
+            "tool_pattern_hashes": (),
+            "pattern_results": {},
+            "force_direct_generation": False,
         }
 
     def _check_budget(self, state: ModuleAgentState) -> None:
@@ -464,8 +514,12 @@ class ModuleAgentGraph:
                 )
                 report.compression_calls += 1
                 report.transport_retries += response.transport_retries
+                report.model_turns += response.model_turns
                 report.input_tokens_estimate += context.input_tokens_estimate
-                report.output_tokens_estimate += estimate_tokens(response.text)
+                report.input_tokens_estimate += response.extra_input_tokens_estimate
+                report.output_tokens_estimate += (
+                    response.output_tokens_estimate or estimate_tokens(response.text)
+                )
                 payload = JSON_OUTPUT_PARSER.parse(response.text)
                 if not isinstance(payload, dict) or payload.get("sources") != [source]:
                     raise ContextBudgetError(
@@ -540,14 +594,118 @@ class ModuleAgentGraph:
                 "static_repairs": report.static_repairs,
             },
         )
+        tool_calls = 0
+        tool_failures = 0
+        tool_counts: dict[str, int] = {}
+        tool_pattern_hashes: tuple[str, ...] = ()
+        pattern_results: dict[str, tuple[bool, int, str]] = dict(
+            state.get("pattern_results", {})
+        )
+
+        def merge_tool_stats() -> None:
+            report.tool_calls += tool_calls
+            report.tool_failures += tool_failures
+            for name, count in tool_counts.items():
+                report.tool_counts[name] = report.tool_counts.get(name, 0) + count
+            report.simulation_attempts += len(tool_pattern_hashes)
+
         try:
-            response = invoke_generation_backend(
-                self.backend_factory(), state["system_prompt"], state["user_prompt"]
-            )
+            def validate_tool_candidate(body: list[dict], run_patterns_now: bool):
+                validated = validate_ir_body(body)
+                return self._materialize(
+                    state,
+                    validated,
+                    run_patterns_enabled=run_patterns_now,
+                )
+
+            def emit_tool_event(
+                kind: str,
+                tool_name: str,
+                elapsed: float,
+                ok: bool,
+                metadata: dict,
+            ) -> None:
+                self.events.emit(
+                    kind,
+                    module_name=state["mod"].name,
+                    stage="tool_session",
+                    attempt=generation_call,
+                    message=(
+                        f"{tool_name}"
+                        if kind == "tool_start"
+                        else f"{tool_name} in {elapsed:.3f}s"
+                    ),
+                    metadata={
+                        "tool": tool_name,
+                        "duration_seconds": elapsed,
+                        "success": ok,
+                        **metadata,
+                    },
+                )
+
+            with IRToolSession(
+                initial_candidate=state.get("candidate"),
+                task_context=(
+                    state["system_prompt"] + "\n\n" + state["user_prompt"]
+                ),
+                validate_candidate=validate_tool_candidate,
+                has_patterns=bool(state["mod"].patterns),
+                remaining_pattern_attempts=max(
+                    0, self.max_simulation_attempts - report.simulation_attempts
+                ),
+                pattern_results=pattern_results,
+                limits=ToolSessionLimits(
+                    timeout_seconds=self.config.tool_timeout_seconds,
+                    max_output_chars=self.config.max_tool_output_chars,
+                    deadline_monotonic=(
+                        state["started"] + self.config.module_deadline_seconds
+                    ),
+                    remaining_model_tokens=max(
+                        1,
+                        self.config.max_module_tokens
+                        - report.input_tokens_estimate
+                        - report.output_tokens_estimate,
+                    ),
+                ),
+                event_callback=emit_tool_event,
+            ) as tool_session:
+                try:
+                    response = invoke_generation_backend(
+                        self.backend_factory(),
+                        state["system_prompt"],
+                        state["user_prompt"],
+                        tool_session=tool_session,
+                        tool_mode=(
+                            "off"
+                            if state.get("force_direct_generation")
+                            and self.config.tool_mode == "auto"
+                            else self.config.tool_mode
+                        ),
+                    )
+                finally:
+                    tool_calls = tool_session.stats.calls
+                    tool_failures = tool_session.stats.failures
+                    tool_counts = dict(tool_session.stats.counts)
+                    tool_pattern_hashes = tuple(
+                        tool_session.stats.pattern_attempt_hashes
+                    )
+                    pattern_results = tool_session.pattern_results
         except Exception as exc:
+            merge_tool_stats()
             return self._failure(state, exc)
         report.transport_retries += response.transport_retries
-        report.output_tokens_estimate += estimate_tokens(response.text)
+        report.model_turns += response.model_turns
+        report.input_tokens_estimate += response.extra_input_tokens_estimate
+        report.output_tokens_estimate += (
+            response.output_tokens_estimate or estimate_tokens(response.text)
+        )
+        merge_tool_stats()
+        if response.tool_fallback_reason:
+            report.tool_fallback_reason = response.tool_fallback_reason
+        try:
+            self._check_budget(state)
+        except GenerationBudgetError as exc:
+            return self._failure(state, exc)
         report.status = "validating"
         report.validation_stage = "candidate_validation"
         self.events.emit(
@@ -557,23 +715,48 @@ class ModuleAgentGraph:
             attempt=generation_call,
             message="checking JSON-IR and executable patterns",
         )
-        return {"response_text": response.text, "report": report, "route": "validate"}
+        return {
+            "response_text": response.text,
+            "tool_pattern_hashes": tool_pattern_hashes,
+            "pattern_results": pattern_results,
+            "force_direct_generation": False,
+            "report": report,
+            "route": "validate",
+        }
 
     def _validate(self, state: ModuleAgentState) -> dict:
         report = state["report"]
         candidate: list | None = None
+        candidate_was_pattern_checked = False
+        pattern_results = dict(state.get("pattern_results", {}))
         try:
             candidate = extract_json_array(state["response_text"])
             candidate = validate_ir_body(candidate)
-            module_dict, patterns_checked = self._materialize(state, candidate)
+            digest = candidate_hash(candidate)
+            cached_pattern_result = pattern_results.get(digest)
+            candidate_was_pattern_checked = cached_pattern_result is not None
+            if cached_pattern_result is None:
+                module_dict, patterns_checked = self._materialize(state, candidate)
+            elif cached_pattern_result[0]:
+                module_dict, _ = self._materialize(
+                    state, candidate, run_patterns_enabled=False
+                )
+                patterns_checked = cached_pattern_result[1]
+            else:
+                raise PatternMismatch(cached_pattern_result[2])
         except (OutputParserException, IRSchemaError, ValueError, CircuitPPLError) as exc:
             simulation_failure = isinstance(exc, PatternMismatch)
             if simulation_failure:
-                report.simulation_attempts += 1
+                if not candidate_was_pattern_checked:
+                    report.simulation_attempts += 1
             else:
                 report.static_repairs += 1
             diagnostic = diagnostic_from_exception(exc, candidate)
             report.failure_fingerprints.append(diagnostic.fingerprint)
+            repeated_diagnostic = (
+                len(report.failure_fingerprints) >= 3
+                and len(set(report.failure_fingerprints[-3:])) == 1
+            )
             report.failure_origin = (
                 "hierarchy" if state.get("direct_dependencies") else "module"
             )
@@ -598,15 +781,31 @@ class ModuleAgentGraph:
                     "next_simulation_attempt": next_simulation_attempt,
                     "max_simulation_attempts": self.max_simulation_attempts,
                     "static_repairs": report.static_repairs,
+                    "force_direct_generation": repeated_diagnostic,
                 },
             )
+            if repeated_diagnostic and self.config.tool_mode == "auto":
+                self.events.emit(
+                    "tool_fallback",
+                    module_name=state["mod"].name,
+                    stage="repairing",
+                    attempt=report.attempts + 1,
+                    message=(
+                        "same diagnostic repeated three times; next generation "
+                        "will bypass tools"
+                    ),
+                )
             return {
                 "candidate": candidate or [],
                 "diagnostic": diagnostic,
+                "pattern_results": pattern_results,
+                "force_direct_generation": (
+                    repeated_diagnostic and self.config.tool_mode == "auto"
+                ),
                 "report": report,
                 "route": "repair",
             }
-        if state["mod"].patterns:
+        if state["mod"].patterns and not candidate_was_pattern_checked:
             report.simulation_attempts += 1
         report.status = "success"
         report.validation_stage = "published"
@@ -632,9 +831,17 @@ class ModuleAgentGraph:
                 "simulation_attempts": report.simulation_attempts,
                 "static_repairs": report.static_repairs,
                 "patterns_checked": report.patterns_checked,
+                "model_turns": report.model_turns,
+                "tool_calls": report.tool_calls,
+                "tool_failures": report.tool_failures,
             },
         )
-        return {"candidate": candidate, "report": report, "route": "done"}
+        return {
+            "candidate": candidate,
+            "pattern_results": pattern_results,
+            "report": report,
+            "route": "done",
+        }
 
     def _failure(
         self,
@@ -653,13 +860,22 @@ class ModuleAgentGraph:
         report.module_dict = None
         report.compression_events = list(dict.fromkeys(report.compression_events))
         report.duration_seconds = time.monotonic() - state["started"]
+        report.budget_seconds = report.duration_seconds
+        report.budget_tokens = (
+            report.input_tokens_estimate + report.output_tokens_estimate
+        )
         self.events.emit(
             "module_failed",
             module_name=state["mod"].name,
             stage=report.status,
             attempt=report.attempts or None,
             message=f"{type(exc).__name__}: {str(exc)[:240]}",
-            metadata={"category": type(exc).__name__},
+            metadata={
+                "category": type(exc).__name__,
+                "model_turns": report.model_turns,
+                "tool_calls": report.tool_calls,
+                "tool_failures": report.tool_failures,
+            },
         )
         update: dict = {"report": report, "route": "done"}
         if candidate is not None:

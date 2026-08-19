@@ -11,6 +11,7 @@ from typing import Any, Callable, Optional
 
 from .context import IR_VERSION, PROMPT_VERSION
 from .models import CompiledModuleArtifact, ResolvedAgentConfig
+from .tools import TOOL_PROTOCOL_VERSION, detect_unix_capabilities
 from ..frontend.module import ModuleDef
 from ..frontend.patterns import pattern_as_dict
 from ..ir.errors import CircuitPPLError
@@ -22,6 +23,12 @@ class ModuleCache:
         self.cache_dir = config.cache_dir
         self._config_identity = config.cache_identity()
         self._model_identity = model_identity
+        self._tool_identity = {
+            "protocol": TOOL_PROTOCOL_VERSION,
+            "unix_capabilities": (
+                detect_unix_capabilities() if config.tool_mode != "off" else ()
+            ),
+        }
 
     @staticmethod
     def build_module_contract(mod: ModuleDef) -> dict[str, Any]:
@@ -70,11 +77,12 @@ class ModuleCache:
             "dependency_modules": dependency_modules or [],
             "model": self._model_identity,
             "config": self._config_identity,
+            "tools": self._tool_identity,
         }
         encoded = json.dumps(
             payload,
             ensure_ascii=False,
-            sort_keys=True,
+            sort_keys=False,
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
@@ -82,7 +90,7 @@ class ModuleCache:
     @staticmethod
     def interface_hash(module_dict: dict) -> str:
         encoded = json.dumps(
-            module_dict.get("ports", {}), sort_keys=True, separators=(",", ":")
+            module_dict.get("ports", {}), sort_keys=False, separators=(",", ":")
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
@@ -106,7 +114,7 @@ class ModuleCache:
                 "dependency_hashes": dependency_hashes,
             },
             ensure_ascii=False,
-            sort_keys=True,
+            sort_keys=False,
             separators=(",", ":"),
         ).encode("utf-8")
         return CompiledModuleArtifact(
@@ -159,7 +167,9 @@ class ModuleCache:
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(payload, stream, ensure_ascii=False, sort_keys=True)
+                # Port declaration order determines instance output binding, so
+                # recursively sorting object keys corrupts cached module meaning.
+                json.dump(payload, stream, ensure_ascii=False, sort_keys=False)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temp_name, path)

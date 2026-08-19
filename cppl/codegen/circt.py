@@ -120,12 +120,14 @@ class _ModuleEmitter:
             for addr, enable in op.reads:
                 if addr not in self._env or enable not in self._env:
                     return False
-            for addr, data, enable in op.writes:
+            for addr, data, enable, mask in op.writes:
                 if (
                     addr not in self._env
                     or data not in self._env
                     or enable not in self._env
                 ):
+                    return False
+                if mask and mask not in self._env:
                     return False
             return True
         else:
@@ -422,10 +424,26 @@ class _ModuleEmitter:
             self._env[op.id[i]] = rdata
 
         # Create write ports (synchronous, latency=1)
-        for addr_ref, data_ref, enable_ref in op.writes:
+        for addr_ref, data_ref, enable_ref, mask_ref in op.writes:
             addr = self.get_value(addr_ref)
             data = self.get_value(data_ref)
             enable = self.get_value(enable_ref)
+            if mask_ref:
+                old_data = seq.ReadPortOp(
+                    readData=element_type,
+                    memory=mem,
+                    addresses=[addr],
+                    latency=0,
+                    rdEn=enable,
+                ).result
+                mask = self.get_value(mask_ref)
+                all_ones = hw.ConstantOp(
+                    IntegerAttr.get(element_type, -1)
+                ).result
+                inverse_mask = comb.xor([mask, all_ones])
+                data = comb.or_(
+                    [comb.and_([data, mask]), comb.and_([old_data, inverse_mask])]
+                )
             seq.WritePortOp(
                 memory=mem,
                 addresses=[addr],
@@ -470,12 +488,29 @@ class _ModuleEmitter:
             ).result
             self._env[op.id[i]] = rdata
 
-        for addr_ref, data_ref, enable_ref in op.writes:
+        for addr_ref, data_ref, enable_ref, mask_ref in op.writes:
+            data = self.get_value(data_ref)
+            if mask_ref:
+                old_data = seq.FirMemReadOp(
+                    mem,
+                    self.get_value(addr_ref),
+                    clk,
+                    enable=self.get_value(enable_ref),
+                    results=[integer_type(op.width)],
+                ).result
+                mask = self.get_value(mask_ref)
+                all_ones = hw.ConstantOp(
+                    IntegerAttr.get(integer_type(op.width), -1)
+                ).result
+                inverse_mask = comb.xor([mask, all_ones])
+                data = comb.or_(
+                    [comb.and_([data, mask]), comb.and_([old_data, inverse_mask])]
+                )
             seq.FirMemWriteOp(
                 mem,
                 self.get_value(addr_ref),
                 clk,
-                self.get_value(data_ref),
+                data,
                 enable=self.get_value(enable_ref),
             )
 

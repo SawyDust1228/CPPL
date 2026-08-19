@@ -700,6 +700,32 @@ class TestMem:
         # Two read ports
         assert mlir.count("seq.read") == 2
 
+    def test_mem_masked_write_uses_internal_read_modify_write(self):
+        raw = """[
+          {"name":"M",
+           "ports":{
+             "clk":{"dir":"input","width":1},
+             "addr":{"dir":"input","width":4},
+             "wdata":{"dir":"input","width":8},
+             "wmask":{"dir":"input","width":8},
+             "wen":{"dir":"input","width":1},
+             "ren":{"dir":"input","width":1},
+             "rdata":{"dir":"output","width":8}
+           },
+           "body":[
+             {"id":["rd"],"op":"mem","width":8,"depth":16,
+              "clock":"clk",
+              "reads":[{"addr":"addr","enable":"ren"}],
+              "writes":[{"addr":"addr","data":"wdata","enable":"wen",
+                         "mask":"wmask"}]},
+             {"op":"output","args":{"rdata":"rd"}}
+           ]}
+        ]"""
+        mlir = compile_fixture(raw)
+        assert mlir.count("seq.read") == 2
+        assert "comb.and" in mlir
+        assert "comb.or" in mlir
+
     def test_mem_width_inference(self):
         raw = """[
           {"name":"M",

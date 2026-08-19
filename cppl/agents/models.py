@@ -58,6 +58,10 @@ class AgentConfig:
     max_module_tokens: Optional[int] = None
     checkpoint_enabled: Optional[bool] = None
     checkpoint_path: Optional[str | Path] = None
+    tool_mode: Optional[str] = None
+    max_tool_rounds: Optional[int] = None
+    tool_timeout_seconds: Optional[float] = None
+    max_tool_output_chars: Optional[int] = None
 
     def resolve(self) -> "ResolvedAgentConfig":
         """Merge Python overrides with CPPL_AGENT_* and existing LLM defaults."""
@@ -150,6 +154,26 @@ class AgentConfig:
                 else env_bool("CPPL_AGENT_CHECKPOINT_ENABLED", True)
             ),
             checkpoint_path=Path(checkpoint_path),
+            tool_mode=str(
+                self.tool_mode
+                if self.tool_mode is not None
+                else (resolve_env_value("CPPL_AGENT_TOOL_MODE") or "auto")
+            ).lower(),
+            max_tool_rounds=(
+                self.max_tool_rounds
+                if self.max_tool_rounds is not None
+                else env_int("CPPL_AGENT_MAX_TOOL_ROUNDS", 12)
+            ),
+            tool_timeout_seconds=(
+                self.tool_timeout_seconds
+                if self.tool_timeout_seconds is not None
+                else float(resolve_env_value("CPPL_AGENT_TOOL_TIMEOUT") or 2.0)
+            ),
+            max_tool_output_chars=(
+                self.max_tool_output_chars
+                if self.max_tool_output_chars is not None
+                else env_int("CPPL_AGENT_MAX_TOOL_OUTPUT_CHARS", 8192)
+            ),
         )
         resolved.validate()
         return resolved
@@ -172,6 +196,10 @@ class ResolvedAgentConfig:
     max_module_tokens: int = 60000
     checkpoint_enabled: bool = True
     checkpoint_path: Path = Path(".cppl/checkpoints.sqlite3")
+    tool_mode: str = "auto"
+    max_tool_rounds: int = 12
+    tool_timeout_seconds: float = 2.0
+    max_tool_output_chars: int = 8192
 
     def validate(self) -> None:
         if self.max_parallelism <= 0:
@@ -190,6 +218,14 @@ class ResolvedAgentConfig:
             raise ValueError("module_deadline_seconds must be positive")
         if self.max_module_tokens <= 0:
             raise ValueError("max_module_tokens must be positive")
+        if self.tool_mode not in {"auto", "off", "required"}:
+            raise ValueError("tool_mode must be 'auto', 'off', or 'required'")
+        if self.max_tool_rounds <= 0:
+            raise ValueError("max_tool_rounds must be positive")
+        if self.tool_timeout_seconds <= 0:
+            raise ValueError("tool_timeout_seconds must be positive")
+        if self.max_tool_output_chars <= 0:
+            raise ValueError("max_tool_output_chars must be positive")
         if self.output_tokens + self.safety_margin_tokens >= self.context_window_tokens:
             raise ValueError(
                 "output_tokens plus safety_margin_tokens must be smaller than "
@@ -206,6 +242,10 @@ class ResolvedAgentConfig:
         return {
             "output_tokens": self.output_tokens,
             "generation_kwargs": self.generation_kwargs,
+            "tool_mode": self.tool_mode,
+            "max_tool_rounds": self.max_tool_rounds,
+            "tool_timeout_seconds": self.tool_timeout_seconds,
+            "max_tool_output_chars": self.max_tool_output_chars,
         }
 
 
@@ -271,6 +311,11 @@ class ModuleCompileReport:
     static_repairs: int = 0
     compression_calls: int = 0
     transport_retries: int = 0
+    model_turns: int = 0
+    tool_calls: int = 0
+    tool_failures: int = 0
+    tool_counts: dict[str, int] = field(default_factory=dict)
+    tool_fallback_reason: str = ""
     duration_seconds: float = 0.0
     input_tokens_estimate: int = 0
     output_tokens_estimate: int = 0

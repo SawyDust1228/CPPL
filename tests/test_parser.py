@@ -337,7 +337,7 @@ class TestParseMem:
         assert op.clock == "clk"
         assert op.reset == "rst"
         assert op.reads == (("addr", "ren"),)
-        assert op.writes == (("addr", "wdata", "wen"),)
+        assert op.writes == (("addr", "wdata", "wen", ""),)
 
     def test_mem_id_reads_mismatch(self):
         raw = """{

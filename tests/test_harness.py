@@ -4,7 +4,7 @@ import io
 import json
 from concurrent.futures import ThreadPoolExecutor
 
-from cppl import Design, In, Out, module
+from cppl import Case, Design, In, Out, module
 from cppl.agents.backend import BackendResponse
 from cppl.agents.models import AgentConfig
 from cppl.agents.models import CompilationReport
@@ -198,6 +198,216 @@ def test_custom_observer_receives_repair_events(tmp_path):
     assert "repair_scheduled" in kinds
     assert "repair" in kinds
     assert kinds[-1] == "design_success"
+
+
+def test_tool_backend_reports_calls_and_emits_safe_events(tmp_path):
+    @module
+    def M(a: In[8]) -> Out[8]:
+        """out equals a."""
+        pass
+
+    class ToolBackend:
+        def __init__(self, config):
+            pass
+
+        def generate_with_tools(
+            self, system_prompt, user_prompt, tool_session, *, output_tokens=None
+        ):
+            body = [{"op": "output", "args": {"out": "a"}}]
+            assert tool_session.execute("replace_ir", {"body": body})["ok"]
+            assert tool_session.execute("validate_ir", {})["ok"]
+            assert tool_session.execute("submit_ir", {})["ok"]
+            return BackendResponse(
+                json.dumps(body),
+                0,
+                model_turns=2,
+                used_tools=True,
+            )
+
+    observer = RecordingObserver()
+    report = CompilationCoordinator(
+        AgentConfig(
+            log_enabled=False,
+            cache_enabled=False,
+            cache_dir=tmp_path / "cache",
+            max_parallelism=1,
+            context_window_tokens=8192,
+            output_tokens=2048,
+            safety_margin_tokens=512,
+        ),
+        backend_factory=ToolBackend,
+        model_identity={"model": "tool-fake"},
+        observer=observer,
+    ).compile([M])
+
+    module_report = report.module_reports["M"]
+    assert report.success
+    assert report.llm_calls == 2
+    assert module_report.model_turns == 2
+    assert module_report.tool_calls == 3
+    assert module_report.tool_failures == 0
+    assert module_report.tool_counts == {
+        "replace_ir": 1,
+        "validate_ir": 1,
+        "submit_ir": 1,
+    }
+    tool_events = [event for event in observer.events if event.kind.startswith("tool_")]
+    assert [event.kind for event in tool_events] == [
+        "tool_start",
+        "tool_finish",
+        "tool_start",
+        "tool_finish",
+        "tool_start",
+        "tool_finish",
+    ]
+    assert all("body" not in event.message for event in tool_events)
+
+
+def test_tool_pattern_check_is_not_counted_twice_at_publication(tmp_path):
+    @module(patterns=[Case({"a": 7}, {"out": 7})])
+    def M(a: In[8]) -> Out[8]:
+        """out equals a."""
+        pass
+
+    class PatternToolBackend:
+        def __init__(self, config):
+            pass
+
+        def generate_with_tools(
+            self, system_prompt, user_prompt, tool_session, *, output_tokens=None
+        ):
+            body = [{"op": "output", "args": {"out": "a"}}]
+            assert tool_session.execute("replace_ir", {"body": body})["ok"]
+            assert tool_session.execute("run_patterns", {})["ok"]
+            assert tool_session.execute("submit_ir", {})["ok"]
+            return BackendResponse(json.dumps(body), 0, used_tools=True)
+
+    report = CompilationCoordinator(
+        AgentConfig(
+            log_enabled=False,
+            cache_enabled=False,
+            cache_dir=tmp_path / "cache",
+            max_parallelism=1,
+            context_window_tokens=8192,
+            output_tokens=2048,
+            safety_margin_tokens=512,
+        ),
+        backend_factory=PatternToolBackend,
+        model_identity={"model": "pattern-tool-fake"},
+    ).compile([M], max_retries=1)
+
+    module_report = report.module_reports["M"]
+    assert report.success
+    assert module_report.simulation_attempts == 1
+    assert module_report.patterns_checked == 1
+    assert module_report.tool_counts == {
+        "replace_ir": 1,
+        "run_patterns": 1,
+        "submit_ir": 1,
+    }
+
+
+def test_failed_tool_pattern_result_is_reused_across_repairs(tmp_path):
+    @module(patterns=[Case({"a": 7}, {"out": 7})])
+    def M(a: In[8]) -> Out[8]:
+        """out equals a."""
+        pass
+
+    bad = [{"id": "zero", "op": "constant", "value": 0, "width": 8},
+           {"op": "output", "args": {"out": "zero"}}]
+    good = [{"op": "output", "args": {"out": "a"}}]
+
+    class RepairingPatternToolBackend:
+        calls = 0
+
+        def __init__(self, config):
+            pass
+
+        def generate_with_tools(
+            self, system_prompt, user_prompt, tool_session, *, output_tokens=None
+        ):
+            self.__class__.calls += 1
+            if self.calls == 1:
+                assert tool_session.execute("replace_ir", {"body": bad})["ok"]
+                mismatch = tool_session.execute("run_patterns", {})
+                assert not mismatch["ok"]
+                return BackendResponse(json.dumps(bad), 0, used_tools=True)
+
+            cached = tool_session.execute("run_patterns", {})
+            assert not cached["ok"]
+            assert tool_session.stats.pattern_attempt_hashes == set()
+            assert tool_session.execute("replace_ir", {"body": good})["ok"]
+            return BackendResponse(json.dumps(good), 0, used_tools=True)
+
+    RepairingPatternToolBackend.calls = 0
+    report = CompilationCoordinator(
+        AgentConfig(
+            log_enabled=False,
+            cache_enabled=False,
+            cache_dir=tmp_path / "cache",
+            max_parallelism=1,
+            context_window_tokens=8192,
+            output_tokens=2048,
+            safety_margin_tokens=512,
+        ),
+        backend_factory=RepairingPatternToolBackend,
+        model_identity={"model": "pattern-tool-repair-fake"},
+    ).compile([M], max_retries=2)
+
+    module_report = report.module_reports["M"]
+    assert report.success
+    assert module_report.simulation_attempts == 2
+    assert RepairingPatternToolBackend.calls == 2
+
+
+def test_repeated_tool_diagnostic_falls_back_to_direct_generation(tmp_path):
+    @module
+    def M(a: In[8]) -> Out[8]:
+        """out equals a."""
+        pass
+
+    invalid = json.dumps([{"op": "output", "args": {"wrong": "a"}}])
+    valid = json.dumps([{"op": "output", "args": {"out": "a"}}])
+
+    class RepeatingToolBackend:
+        tool_calls = 0
+        direct_calls = 0
+
+        def __init__(self, config):
+            pass
+
+        def generate_with_tools(
+            self, system_prompt, user_prompt, tool_session, *, output_tokens=None
+        ):
+            self.__class__.tool_calls += 1
+            return BackendResponse(invalid, 0, used_tools=True)
+
+        def generate_structured(
+            self, system_prompt, user_prompt, *, output_tokens=None
+        ):
+            self.__class__.direct_calls += 1
+            return BackendResponse(valid, 0)
+
+    RepeatingToolBackend.tool_calls = 0
+    RepeatingToolBackend.direct_calls = 0
+    report = CompilationCoordinator(
+        AgentConfig(
+            log_enabled=False,
+            cache_enabled=False,
+            cache_dir=tmp_path / "cache",
+            max_parallelism=1,
+            context_window_tokens=8192,
+            output_tokens=2048,
+            safety_margin_tokens=512,
+            tool_mode="auto",
+        ),
+        backend_factory=RepeatingToolBackend,
+        model_identity={"model": "repeating-tool-fake"},
+    ).compile([M])
+
+    assert report.success
+    assert RepeatingToolBackend.tool_calls == 3
+    assert RepeatingToolBackend.direct_calls == 1
 
 
 def test_observer_errors_do_not_break_compilation(tmp_path):

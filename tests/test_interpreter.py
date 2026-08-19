@@ -286,6 +286,141 @@ class TestMemory:
         assert sim.evaluate({"clk": 1, "ren": 1}) == {"rdata": 0}
         assert sim.peek_memory("MemTop.storage") == (0, 0, 0, 0)
 
+    def test_masked_write_preserves_unselected_bits(self):
+        raw = json.loads(json.dumps(MEM_JSON))
+        raw[0]["ports"]["wmask"] = {"dir": "input", "width": 8}
+        raw[0]["body"][0]["writes"][0]["mask"] = "wmask"
+        sim = Interpreter.from_json(raw)
+
+        sim.evaluate(
+            {
+                "clk": 0,
+                "wen": 1,
+                "waddr": 2,
+                "wdata": 0xAB,
+                "wmask": 0x0F,
+            }
+        )
+        sim.evaluate({"clk": 1})
+        assert sim.peek_memory("storage")[2] == 0x0B
+
+        sim.evaluate({"clk": 0, "wdata": 0xC0, "wmask": 0xF0})
+        sim.evaluate({"clk": 1})
+        assert sim.peek_memory("storage")[2] == 0xCB
+
+    def test_hierarchical_multi_read_memory_resolves_ports_independently(self):
+        raw = [
+            {
+                "name": "DualMem",
+                "ports": {
+                    "clk": {"dir": "input", "width": 1},
+                    "a": {"dir": "input", "width": 2},
+                    "b": {"dir": "input", "width": 2},
+                    "first": {"dir": "output", "width": 2},
+                    "second": {"dir": "output", "width": 2},
+                },
+                "body": [
+                    {"id": "one", "op": "constant", "value": 1, "width": 1},
+                    {
+                        "id": ["first_value", "second_value"],
+                        "op": "mem",
+                        "width": 2,
+                        "depth": 4,
+                        "clock": "clk",
+                        "name": "mem",
+                        "reads": [
+                            {"addr": "a", "enable": "one"},
+                            {"addr": "b", "enable": "one"},
+                        ],
+                        "writes": [],
+                    },
+                    {
+                        "op": "output",
+                        "args": {"first": "first_value", "second": "second_value"},
+                    },
+                ],
+            },
+            {
+                "name": "Top",
+                "ports": {
+                    "clk": {"dir": "input", "width": 1},
+                    "a": {"dir": "input", "width": 2},
+                    "out": {"dir": "output", "width": 2},
+                },
+                "body": [
+                    {
+                        "id": ["first", "second"],
+                        "op": "instance",
+                        "module": "DualMem",
+                        "name": "u",
+                        "args": {"clk": "clk", "a": "a", "b": "derived_b"},
+                    },
+                    {
+                        "id": "derived_b",
+                        "op": "extract",
+                        "args": ["first"],
+                        "lowBit": 0,
+                        "width": 2,
+                    },
+                    {"op": "output", "args": {"out": "second"}},
+                ],
+            },
+        ]
+        modules = parse_design(raw)
+        sim = Interpreter(
+            modules,
+            top="Top",
+            memory_fixtures={"u.mem": {1: 2, 2: 3}},
+        )
+        assert sim.evaluate({"clk": 0, "a": 1}) == {"out": 3}
+
+    def test_sequential_child_receives_late_resolved_inputs(self):
+        raw = [
+            {
+                "name": "State",
+                "ports": {
+                    "clk": {"dir": "input", "width": 1},
+                    "d": {"dir": "input", "width": 8},
+                    "en": {"dir": "input", "width": 1},
+                    "q": {"dir": "output", "width": 8},
+                },
+                "body": [
+                    {
+                        "id": "state",
+                        "op": "reg",
+                        "args": ["d"],
+                        "clock": "clk",
+                        "enable": "en",
+                        "width": 8,
+                    },
+                    {"op": "output", "args": {"q": "state"}},
+                ],
+            },
+            {
+                "name": "Top",
+                "ports": {
+                    "clk": {"dir": "input", "width": 1},
+                    "en": {"dir": "input", "width": 1},
+                    "q": {"dir": "output", "width": 8},
+                },
+                "body": [
+                    {"id": "one", "op": "constant", "value": 1, "width": 8},
+                    {
+                        "id": ["child_q"],
+                        "op": "instance",
+                        "module": "State",
+                        "name": "state0",
+                        "args": {"clk": "clk", "d": "next_q", "en": "en"},
+                    },
+                    {"id": "next_q", "op": "add", "args": ["child_q", "one"]},
+                    {"op": "output", "args": {"q": "child_q"}},
+                ],
+            },
+        ]
+        sim = Interpreter.from_json(raw, top="Top")
+        assert sim.evaluate({"clk": 0, "en": 1}) == {"q": 0}
+        assert sim.evaluate({"clk": 1}) == {"q": 1}
+
     def test_init_file(self, tmp_path):
         init_file = tmp_path / "memory.hex"
         init_file.write_text("01 02\n@3 ff // comment\n")

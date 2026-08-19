@@ -223,6 +223,39 @@ class TestPatternRunner:
         ]
         assert run_patterns(modules, "Top", patterns) == 1
 
+    def test_top_module_and_local_memory_may_share_a_name(self):
+        modules = parse_design(
+            [
+                {
+                    "name": "mem",
+                    "ports": {"clk": {"dir": "input", "width": 1}},
+                    "body": [
+                        {
+                            "id": [],
+                            "op": "mem",
+                            "width": 8,
+                            "depth": 4,
+                            "clock": "clk",
+                            "name": "mem",
+                            "reads": [],
+                            "writes": [],
+                        },
+                        {"op": "output", "args": {}},
+                    ],
+                }
+            ]
+        )
+        patterns = [
+            Case(
+                name="same_name_fixture_probe",
+                inputs={"clk": 0},
+                outputs={},
+                probes={"mem[2]": 0x5A},
+                fixtures=[MemoryFixture("mem", {2: 0x5A})],
+            )
+        ]
+        assert run_patterns(modules, "mem", patterns) == 1
+
     def test_validated_module_is_cached_before_design_failure(self, tmp_path):
         @module
         def Good(a: In[8]) -> Out[8]:
@@ -471,6 +504,31 @@ class TestCompilePatternLoop:
         cache = ModuleCache(agent_test_config(tmp_path).resolve(), {"model": "fake"})
         assert cache.key_for(Parent, dependency_a) != cache.key_for(
             Parent, dependency_b
+        )
+
+    def test_cache_preserves_semantic_port_order(self, tmp_path):
+        cache = ModuleCache(agent_test_config(tmp_path).resolve(), {"model": "fake"})
+        module_dict = {
+            "name": "Pair",
+            "ports": {
+                "z_out": {"dir": "output", "width": 1},
+                "a_out": {"dir": "output", "width": 1},
+            },
+            "body": [{"op": "output", "args": {"z_out": "z", "a_out": "a"}}],
+        }
+        key = "ab" * 32
+        cache.store(key, module_dict)
+        loaded = cache.load(key, lambda candidate: None)
+
+        assert loaded is not None
+        assert list(loaded["ports"]) == ["z_out", "a_out"]
+
+        reversed_ports = {
+            **module_dict,
+            "ports": dict(reversed(list(module_dict["ports"].items()))),
+        }
+        assert cache.interface_hash(module_dict) != cache.interface_hash(
+            reversed_ports
         )
 
     def test_hierarchical_pattern_uses_real_dependency_ir(self, tmp_path):
